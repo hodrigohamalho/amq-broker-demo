@@ -1,0 +1,59 @@
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemis
+metadata:
+  name: jdbc-broker
+  namespace: amq-jdbc-demo
+spec:
+  deploymentPlan:
+    # 2 brokers sharing one PostgreSQL as a shared store (active/passive HA)
+    size: 2
+    # Custom broker image WITH the PostgreSQL JDBC driver
+    image: image-registry.openshift-image-registry.svc:5000/amq-jdbc-demo/amq-broker-postgres@sha256:fd391a249f9a5e9f63099f62fdab90cd13891c2126b4f2176f08471570fd62be
+    requireLogin: true
+    persistenceEnabled: true
+    journalType: nio
+    storage:
+      size: 2Gi
+    managementRBACEnabled: true
+    # Liveness based on the Java process (not port 8161), so the BACKUP is not
+    # killed while it waits for the shared-store lock. Readiness stays default,
+    # so the backup correctly shows up as "not ready".
+    livenessProbe:
+      exec:
+        command: ["/bin/bash", "-c", "pgrep -f artemis >/dev/null"]
+      initialDelaySeconds: 30
+      periodSeconds: 15
+      timeoutSeconds: 5
+      failureThreshold: 5
+    resources:
+      requests: { cpu: "250m", memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  ActiveMQArtemis: jdbc-broker
+              topologyKey: kubernetes.io/hostname
+  adminUser: admin
+  adminPassword: admin
+  acceptors:
+    - name: all
+      protocols: core,amqp,openwire
+      port: 61616
+      sslEnabled: false
+  console:
+    expose: true
+  # Database persistence (JDBC) + shared-store HA (a lock in the DB itself decides who is active)
+  brokerProperties:
+    - storeConfiguration=DATABASE
+    - storeConfiguration.jdbcDriverClassName=org.postgresql.Driver
+    - storeConfiguration.jdbcConnectionUrl=jdbc:postgresql://postgres:5432/artemis?user=artemis&password=artemis
+    - storeConfiguration.bindingsTableName=BINDINGS
+    - storeConfiguration.messageTableName=MESSAGES
+    - storeConfiguration.largeMessageTableName=LARGE_MESSAGES
+    - storeConfiguration.pageStoreTableName=PAGE_STORE
+    - storeConfiguration.nodeManagerStoreTableName=NODE_MANAGER
+    - HAPolicyConfiguration=SHARED_STORE_PRIMARY

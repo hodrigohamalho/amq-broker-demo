@@ -1,0 +1,16 @@
+# Build artifacts (the JDBC driver is downloaded at build time)
+build/jdbc/postgresql.jar
+
+# Local tooling / IDE
+.claude/
+.idea/
+.vscode/
+
+# OS noise
+.DS_Store
+*.swp
+*.log
+
+# Python bytecode
+__pycache__/
+*.pyc

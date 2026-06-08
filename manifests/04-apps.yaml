@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amq-producer
+  namespace: amq-demo
+  labels:
+    app: amq-producer
+    demo: amq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: amq-producer
+  template:
+    metadata:
+      labels:
+        app: amq-producer
+        demo: amq
+    spec:
+      containers:
+        - name: producer
+          image: registry.redhat.io/amq7/amq-broker-rhel9@sha256:ec6a178d76a1521ea68ef312b43db6b952802d02431ad81f1b9bd107015c621d
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              # Failover list: PREFERS broker-0, falls back to broker-1 if it dies.
+              # In the active/active cluster both brokers are always alive, so the
+              # switch is near-instant (no lock wait like in shared-store/JDBC).
+              URL='(tcp://demo-broker-all-0-svc:61616,tcp://demo-broker-all-1-svc:61616)?reconnectAttempts=3&retryInterval=1000&callTimeout=5000&connectionTTL=8000&clientFailureCheckPeriod=3000'
+              echo "[PRODUCER] publishing to demoQueue (prefers broker-0, fails over to broker-1)";
+              while true; do
+                /opt/amq/bin/artemis producer \
+                  --url "$URL" \
+                  --user admin --password admin \
+                  --destination queue://demoQueue \
+                  --message-count 5 --sleep 2000 --message-size 256;
+                echo "[PRODUCER] batch sent / reconnect at $(date '+%H:%M:%S')";
+                sleep 1;
+              done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amq-consumer
+  namespace: amq-demo
+  labels:
+    app: amq-consumer
+    demo: amq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: amq-consumer
+  template:
+    metadata:
+      labels:
+        app: amq-consumer
+        demo: amq
+    spec:
+      containers:
+        - name: consumer
+          image: registry.redhat.io/amq7/amq-broker-rhel9@sha256:ec6a178d76a1521ea68ef312b43db6b952802d02431ad81f1b9bd107015c621d
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              # Failover list: PREFERS broker-1 (keeps the redistribution visible),
+              # falls back to broker-0 if broker-1 dies.
+              URL='(tcp://demo-broker-all-1-svc:61616,tcp://demo-broker-all-0-svc:61616)?reconnectAttempts=3&retryInterval=1000&callTimeout=5000&connectionTTL=8000&clientFailureCheckPeriod=3000'
+              echo "[CONSUMER] consuming from demoQueue (prefers broker-1, fails over to broker-0)";
+              while true; do
+                /opt/amq/bin/artemis consumer \
+                  --url "$URL" \
+                  --user admin --password admin \
+                  --destination queue://demoQueue \
+                  --message-count 100000 --receive-timeout 30000 --verbose;
+                echo "[CONSUMER] reconnect after drop/idle at $(date '+%H:%M:%S')";
+                sleep 1;
+              done

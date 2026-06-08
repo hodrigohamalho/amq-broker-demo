@@ -1,0 +1,78 @@
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemisAddress
+metadata:
+  name: demo-queue
+  namespace: amq-jdbc-demo
+spec:
+  addressName: demoQueue
+  queueName: demoQueue
+  routingType: anycast
+  applyToCrNames:
+    - jdbc-broker
+---
+# Failover URL for shared-store with 2 SHARED_STORE_PRIMARY brokers:
+#  - ha=false  -> does not wait for a "backup" in the topology; uses the static connector list
+#  - reconnectAttempts=12 (FINITE) -> after ~12s without success the CLI gives up and EXITS,
+#    and the 'while' loop reconnects from scratch to whichever broker is active (ss-0 or ss-1)
+#  - low timeouts -> detects the outage in seconds (not the default 30s)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amq-producer
+  namespace: amq-jdbc-demo
+  labels: { app: amq-producer, demo: amq-jdbc }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: amq-producer } }
+  template:
+    metadata:
+      labels: { app: amq-producer, demo: amq-jdbc }
+    spec:
+      containers:
+        - name: producer
+          image: image-registry.openshift-image-registry.svc:5000/amq-jdbc-demo/amq-broker-postgres@sha256:fd391a249f9a5e9f63099f62fdab90cd13891c2126b4f2176f08471570fd62be
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              URL='(tcp://jdbc-broker-all-0-svc:61616,tcp://jdbc-broker-all-1-svc:61616)?ha=false&reconnectAttempts=12&retryInterval=1000&callTimeout=5000&connectionTTL=8000&clientFailureCheckPeriod=2000&confirmationWindowSize=10485760'
+              echo "[PRODUCER] publishing to demoQueue (shared-store failover)";
+              while true; do
+                /opt/amq/bin/artemis producer \
+                  --url "$URL" --user admin --password admin \
+                  --destination queue://demoQueue \
+                  --message-count 5 --sleep 2000 --message-size 256;
+                echo "[PRODUCER] batch/reconnect at $(date '+%H:%M:%S')";
+                sleep 1;
+              done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amq-consumer
+  namespace: amq-jdbc-demo
+  labels: { app: amq-consumer, demo: amq-jdbc }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: amq-consumer } }
+  template:
+    metadata:
+      labels: { app: amq-consumer, demo: amq-jdbc }
+    spec:
+      containers:
+        - name: consumer
+          image: image-registry.openshift-image-registry.svc:5000/amq-jdbc-demo/amq-broker-postgres@sha256:fd391a249f9a5e9f63099f62fdab90cd13891c2126b4f2176f08471570fd62be
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              URL='(tcp://jdbc-broker-all-0-svc:61616,tcp://jdbc-broker-all-1-svc:61616)?ha=false&reconnectAttempts=12&retryInterval=1000&callTimeout=5000&connectionTTL=8000&clientFailureCheckPeriod=2000&confirmationWindowSize=10485760'
+              echo "[CONSUMER] consuming from demoQueue (shared-store failover)";
+              # loop: if the connection drops, the CLI exits (finite reconnect) and we
+              # reconnect to whichever broker is active after the failover.
+              while true; do
+                /opt/amq/bin/artemis consumer \
+                  --url "$URL" --user admin --password admin \
+                  --destination queue://demoQueue \
+                  --message-count 100000 --receive-timeout 15000 --verbose;
+                echo "[CONSUMER] reconnecting after drop/idle at $(date '+%H:%M:%S')";
+                sleep 1;
+              done

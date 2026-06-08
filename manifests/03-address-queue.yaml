@@ -1,0 +1,12 @@
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemisAddress
+metadata:
+  name: demo-queue
+  namespace: amq-demo
+spec:
+  addressName: demoQueue
+  queueName: demoQueue
+  routingType: anycast
+  # Create the queue on every broker in the cluster
+  applyToCrNames:
+    - demo-broker

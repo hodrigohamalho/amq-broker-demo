@@ -1,0 +1,13 @@
+# AMQ Broker HA Visualizer — backend + frontend, stdlib only.
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+LABEL org.opencontainers.image.title="AMQ Broker HA Visualizer" \
+      org.opencontainers.image.description="Live, animated web app for demoing AMQ Broker high availability on OpenShift" \
+      org.opencontainers.image.source="https://github.com/hodrigohamalho/amq-broker-demo" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+# ubi9/python-311 already runs as non-root (uid 1001) with WORKDIR /opt/app-root/src
+COPY server.py index.html ./
+
+EXPOSE 8080
+CMD ["python3", "server.py"]

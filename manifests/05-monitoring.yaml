@@ -1,0 +1,48 @@
+# Coleta das metricas do broker pelo Prometheus (User Workload Monitoring)
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: amq-broker-metrics
+  namespace: amq-demo
+  labels:
+    app: amq-broker
+spec:
+  selector:
+    matchLabels:
+      ActiveMQArtemis: demo-broker
+  podMetricsEndpoints:
+    - port: wconsj
+      path: /metrics
+      interval: 10s
+      scheme: http
+---
+# ServiceAccount que o Grafana usa para consultar o Thanos/Prometheus do cluster
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana-reader
+  namespace: amq-demo
+---
+# Token de longa duracao para o ServiceAccount acima
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-reader-token
+  namespace: amq-demo
+  annotations:
+    kubernetes.io/service-account.name: grafana-reader
+type: kubernetes.io/service-account-token
+---
+# Permissao de leitura das metricas do cluster
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: grafana-reader-monitoring-view
+subjects:
+  - kind: ServiceAccount
+    name: grafana-reader
+    namespace: amq-demo
+roleRef:
+  kind: ClusterRole
+  name: cluster-monitoring-view
+  apiGroup: rbac.authorization.k8s.io

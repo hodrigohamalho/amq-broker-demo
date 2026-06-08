@@ -1,0 +1,111 @@
+# TOPIC scenario (multicast / pub-sub) in amq-demo.
+# The broker auto-creates the multicast address 'demoTopic'; each consumer creates
+# its own subscription and gets a COPY of every message (fan-out).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amq-topic-producer
+  namespace: amq-demo
+  labels: { app: amq-topic-producer, demo: amq-topic }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: amq-topic-producer } }
+  template:
+    metadata:
+      labels: { app: amq-topic-producer, demo: amq-topic }
+    spec:
+      containers:
+        - name: producer
+          image: registry.redhat.io/amq7/amq-broker-rhel9@sha256:ec6a178d76a1521ea68ef312b43db6b952802d02431ad81f1b9bd107015c621d
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              echo "[TOPIC-PRODUCER] publishing to topic://demoTopic";
+              # give the subscribers time to create their subscriptions
+              sleep 15;
+              while true; do
+                /opt/amq/bin/artemis producer \
+                  --url tcp://demo-broker-all-0-svc:61616 \
+                  --user admin --password admin \
+                  --destination topic://demoTopic \
+                  --message-count 5 --sleep 2000 --message-size 256;
+                echo "[TOPIC-PRODUCER] batch published at $(date '+%H:%M:%S')";
+              done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amq-topic-sub-a
+  namespace: amq-demo
+  labels: { app: amq-topic-sub-a, demo: amq-topic }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: amq-topic-sub-a } }
+  template:
+    metadata:
+      labels: { app: amq-topic-sub-a, demo: amq-topic }
+    spec:
+      containers:
+        - name: consumer
+          image: registry.redhat.io/amq7/amq-broker-rhel9@sha256:ec6a178d76a1521ea68ef312b43db6b952802d02431ad81f1b9bd107015c621d
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              echo "[TOPIC-SUB-a] subscribing to topic://demoTopic";
+              /opt/amq/bin/artemis consumer \
+                --url tcp://demo-broker-all-0-svc:61616 \
+                --user admin --password admin \
+                --destination topic://demoTopic \
+                --message-count 100000 --receive-timeout 120000 --verbose
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amq-topic-sub-b
+  namespace: amq-demo
+  labels: { app: amq-topic-sub-b, demo: amq-topic }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: amq-topic-sub-b } }
+  template:
+    metadata:
+      labels: { app: amq-topic-sub-b, demo: amq-topic }
+    spec:
+      containers:
+        - name: consumer
+          image: registry.redhat.io/amq7/amq-broker-rhel9@sha256:ec6a178d76a1521ea68ef312b43db6b952802d02431ad81f1b9bd107015c621d
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              echo "[TOPIC-SUB-b] subscribing to topic://demoTopic";
+              /opt/amq/bin/artemis consumer \
+                --url tcp://demo-broker-all-0-svc:61616 \
+                --user admin --password admin \
+                --destination topic://demoTopic \
+                --message-count 100000 --receive-timeout 120000 --verbose
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amq-topic-sub-c
+  namespace: amq-demo
+  labels: { app: amq-topic-sub-c, demo: amq-topic }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: amq-topic-sub-c } }
+  template:
+    metadata:
+      labels: { app: amq-topic-sub-c, demo: amq-topic }
+    spec:
+      containers:
+        - name: consumer
+          image: registry.redhat.io/amq7/amq-broker-rhel9@sha256:ec6a178d76a1521ea68ef312b43db6b952802d02431ad81f1b9bd107015c621d
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              echo "[TOPIC-SUB-c] subscribing to topic://demoTopic";
+              /opt/amq/bin/artemis consumer \
+                --url tcp://demo-broker-all-0-svc:61616 \
+                --user admin --password admin \
+                --destination topic://demoTopic \
+                --message-count 100000 --receive-timeout 120000 --verbose

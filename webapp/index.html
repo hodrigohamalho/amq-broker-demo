@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AMQ Broker · High Availability</title>
+<style>
+  :root{
+    --bg0:#0a0d14; --bg1:#121826; --card:rgba(255,255,255,.045);
+    --cardb:rgba(255,255,255,.09); --txt:#e8edf6; --muted:#8b97ad;
+    --rh:#ee0000; --rh2:#ff4d4d; --green:#3ddc84; --amber:#ffb020;
+    --cyan:#38bdf8; --violet:#a78bfa; --shadow:0 10px 40px rgba(0,0,0,.45);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--txt); background:
+      radial-gradient(1200px 700px at 70% -10%, #1b2540 0%, transparent 60%),
+      radial-gradient(900px 600px at 0% 110%, #25121a 0%, transparent 55%),
+      linear-gradient(160deg,var(--bg0),var(--bg1));
+    min-height:100%; overflow-x:hidden;
+  }
+  header{
+    display:flex;align-items:center;gap:16px;padding:18px 26px;
+    border-bottom:1px solid rgba(255,255,255,.06);
+  }
+  .logo{display:flex;align-items:center;gap:12px}
+  .logo .mark{
+    width:38px;height:38px;border-radius:10px;flex:0 0 auto;
+    background:linear-gradient(135deg,var(--rh),#a30000);
+    box-shadow:0 6px 18px rgba(238,0,0,.4);
+    display:grid;place-items:center;font-weight:800;color:#fff;font-size:18px;
+  }
+  .logo h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.2px}
+  .logo p{margin:0;font-size:12px;color:var(--muted)}
+  .spacer{flex:1}
+  .pill{
+    display:inline-flex;align-items:center;gap:7px;font-size:12.5px;
+    padding:7px 12px;border-radius:999px;border:1px solid var(--cardb);
+    background:var(--card);color:var(--muted)
+  }
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);
+       box-shadow:0 0 0 0 rgba(0,0,0,0)}
+  .dot.ok{background:var(--green);box-shadow:0 0 10px var(--green)}
+  .dot.bad{background:var(--rh2);box-shadow:0 0 10px var(--rh2)}
+
+  .wrap{display:grid;grid-template-columns:1fr 320px;gap:18px;padding:18px 26px}
+  @media(max-width:1100px){.wrap{grid-template-columns:1fr}}
+
+  .stagewrap{
+    position:relative;background:var(--card);border:1px solid var(--cardb);
+    border-radius:18px;box-shadow:var(--shadow);overflow:hidden;
+  }
+  .stage{position:relative;width:100%;aspect-ratio:16/9;min-height:440px}
+  svg.links{position:absolute;inset:0;width:100%;height:100%;z-index:1}
+  .flow{animation:dashflow 1s linear infinite}
+  @keyframes dashflow{to{stroke-dashoffset:-28}}
+
+  .node{position:absolute;transform:translate(-50%,-50%);z-index:2;
+        transition:opacity .4s, filter .4s}
+  .endpoint{
+    width:118px;text-align:center;
+  }
+  .endpoint .ic{
+    width:62px;height:62px;margin:0 auto 8px;border-radius:16px;
+    display:grid;place-items:center;font-size:26px;
+    background:linear-gradient(135deg,rgba(255,255,255,.10),rgba(255,255,255,.03));
+    border:1px solid var(--cardb);box-shadow:var(--shadow)
+  }
+  .endpoint .lbl{font-size:13px;font-weight:600}
+  .endpoint .sub{font-size:11px;color:var(--muted)}
+  .badge{display:inline-block;margin-top:4px;font-size:11px;padding:2px 8px;
+         border-radius:999px;background:rgba(56,189,248,.16);color:var(--cyan);
+         border:1px solid rgba(56,189,248,.3)}
+
+  .broker{
+    width:236px;border-radius:16px;padding:14px 15px;
+    background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.025));
+    border:1px solid var(--cardb);box-shadow:var(--shadow);position:relative;
+  }
+  .broker.active{border-color:rgba(61,220,132,.5);
+     box-shadow:0 0 0 1px rgba(61,220,132,.25),0 14px 40px rgba(0,0,0,.5)}
+  .broker.offline{opacity:.5;filter:grayscale(.7)}
+  .broker.offline{border-color:rgba(238,0,0,.5)}
+  .broker .top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .broker .nm{font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px}
+  .broker .pod{font-size:11px;color:var(--muted);margin-top:1px}
+  .st{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:999px;
+      letter-spacing:.4px;text-transform:uppercase}
+  .st.active{background:rgba(61,220,132,.16);color:var(--green);
+             border:1px solid rgba(61,220,132,.4)}
+  .st.standby{background:rgba(255,176,32,.14);color:var(--amber);
+              border:1px solid rgba(255,176,32,.4)}
+  .st.offline{background:rgba(238,0,0,.16);color:var(--rh2);
+              border:1px solid rgba(238,0,0,.45)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+  .met{background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.05);
+       border-radius:10px;padding:7px 9px}
+  .met .v{font-size:18px;font-weight:700;line-height:1}
+  .met .k{font-size:10px;color:var(--muted);margin-top:3px}
+  .met.hl .v{color:var(--cyan)}
+  .pulse{position:absolute;inset:-1px;border-radius:16px;pointer-events:none}
+  .broker.active .pulse{box-shadow:0 0 0 0 rgba(61,220,132,.5);
+     animation:pulse 2.4s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(61,220,132,.35)}
+     70%{box-shadow:0 0 0 14px rgba(61,220,132,0)}100%{box-shadow:0 0 0 0 rgba(61,220,132,0)}}
+
+  /* side panel */
+  .side{display:flex;flex-direction:column;gap:14px}
+  .panel{background:var(--card);border:1px solid var(--cardb);border-radius:16px;
+         padding:16px;box-shadow:var(--shadow)}
+  .panel h3{margin:0 0 10px;font-size:13px;text-transform:uppercase;
+            letter-spacing:.6px;color:var(--muted)}
+  .seg{display:flex;background:rgba(0,0,0,.25);border-radius:12px;padding:4px;gap:4px}
+  .seg button{flex:1;border:0;background:transparent;color:var(--muted);
+     padding:9px;border-radius:9px;font-weight:600;cursor:pointer;font-size:13px}
+  .seg button.on{background:linear-gradient(135deg,var(--rh),#b00);color:#fff;
+     box-shadow:0 6px 16px rgba(238,0,0,.35)}
+  .btn{display:flex;align-items:center;gap:10px;width:100%;cursor:pointer;
+     border:1px solid var(--cardb);background:var(--card);color:var(--txt);
+     padding:11px 13px;border-radius:11px;font-size:13px;font-weight:600;
+     margin-top:8px;transition:.15s;text-align:left}
+  .btn:hover{background:rgba(255,255,255,.09);transform:translateY(-1px)}
+  .btn .em{font-size:16px}
+  .btn.warn{border-color:rgba(255,176,32,.4)}
+  .btn.danger{border-color:rgba(238,0,0,.4)}
+  .btn.ghost{opacity:.85}
+  .narr{font-size:13.5px;line-height:1.5;min-height:64px}
+  .narr b{color:var(--txt)}
+  .legend{display:flex;flex-direction:column;gap:9px;font-size:12.5px;color:var(--muted)}
+  .legend .row{display:flex;align-items:center;gap:10px}
+  .swatch{width:14px;height:14px;border-radius:50%;flex:0 0 auto}
+  .toast{position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:50;
+     background:#1b2436;border:1px solid var(--cardb);padding:11px 16px;border-radius:12px;
+     font-size:13px;box-shadow:var(--shadow);opacity:0;transition:.3s;pointer-events:none}
+  .toast.show{opacity:1}
+  .banner{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:5;
+     background:rgba(238,0,0,.16);border:1px solid rgba(238,0,0,.45);color:#ffd0d0;
+     padding:8px 16px;border-radius:999px;font-size:13px;font-weight:600;
+     display:none;align-items:center;gap:9px;backdrop-filter:blur(6px)}
+  .banner.show{display:flex}
+  .foot{padding:6px 26px 24px;color:var(--muted);font-size:11.5px}
+  code{background:rgba(0,0,0,.35);padding:2px 6px;border-radius:6px;font-size:11px}
+</style>
+</head>
+<body>
+<div class="toast" id="toast"></div>
+<header>
+  <div class="logo">
+    <div class="mark">▲</div>
+    <div>
+      <h1>AMQ Broker · High Availability</h1>
+      <p>2-broker cluster with volume (PV) persistence · live data via Jolokia</p>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <div class="pill"><span class="dot" id="connDot"></span><span id="connTxt">connecting…</span></div>
+</header>
+
+<div class="wrap">
+  <div class="stagewrap">
+    <div class="banner" id="banner"></div>
+    <div class="stage" id="stage">
+      <svg class="links" id="svg" preserveAspectRatio="none">
+        <defs>
+          <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="3.2" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <g id="paths"></g>
+        <g id="dots"></g>
+      </svg>
+      <!-- nodes injected via JS -->
+    </div>
+  </div>
+
+  <div class="side">
+    <div class="panel">
+      <h3>Scenario</h3>
+      <div class="seg" id="modeSeg">
+        <button data-mode="queue" class="on">📥 Queue (anycast)</button>
+        <button data-mode="topic">📡 Topic (multicast)</button>
+      </div>
+      <div id="modeHint" style="font-size:12px;color:var(--muted);margin-top:9px;line-height:1.45"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Live narration</h3>
+      <div class="narr" id="narr">Starting…</div>
+    </div>
+
+    <div class="panel">
+      <h3>Demo controls</h3>
+      <button class="btn danger" data-act="kill" data-id="0"><span class="em">💥</span> Simulate Broker-0 failure (pod kill)</button>
+      <button class="btn warn" data-act="scaledown" data-id="1"><span class="em">📉</span> Scale-down 2→1 (message migration)</button>
+      <button class="btn ghost" data-act="scaleup" data-id="0"><span class="em">♻️</span> Restore HA (scale-up 1→2)</button>
+      <div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.45">
+        Actions use <code>oc</code> on your machine. If the login expired, the app shows the command to run manually.
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Legend</h3>
+      <div class="legend">
+        <div class="row"><span class="swatch" style="background:var(--cyan)"></span> Message (queue / point-to-point)</div>
+        <div class="row"><span class="swatch" style="background:var(--violet)"></span> Message (topic / copy per subscriber)</div>
+        <div class="row"><span class="swatch" style="background:var(--amber)"></span> Migration between brokers</div>
+        <div class="row"><span class="swatch" style="background:var(--green)"></span> Broker ACTIVE</div>
+        <div class="row"><span class="swatch" style="background:var(--rh2)"></span> Broker OFFLINE</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="foot" id="foot"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const svg = $("#svg"), pathsG = $("#paths"), dotsG = $("#dots"), stage = $("#stage");
+const NS = "http://www.w3.org/2000/svg";
+
+let CFG = null;
+let mode = "queue";
+let last = null;          // last server state
+let prev = {};            // previous counters for deltas (per broker id)
+let dots = [];            // animated dots
+let layout = {};          // pixel coords
+let offlineSince = {};    // id -> bool
+let narration = "Starting…";
+
+const COLORS = {queue:"#38bdf8", topic:"#a78bfa", migrate:"#ffb020"};
+
+// ---------- layout ----------
+const ANCHORS = {
+  producer:{x:.07,y:.5},
+  b0:{x:.40,y:.27},
+  b1:{x:.40,y:.73},
+  consumer:{x:.92,y:.5},
+  s0:{x:.93,y:.26}, s1:{x:.93,y:.5}, s2:{x:.93,y:.74}
+};
+
+function computeLayout(){
+  const r = stage.getBoundingClientRect();
+  const W=r.width, H=r.height;
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  layout = {};
+  for(const k in ANCHORS) layout[k] = {x:ANCHORS[k].x*W, y:ANCHORS[k].y*H};
+  layout.W=W; layout.H=H;
+  placeNodes();
+  drawPaths();
+}
+
+// ---------- nodes (HTML) ----------
+function nodeEl(id){ return document.getElementById("node-"+id); }
+function ensureNode(id, html, cls){
+  let el = nodeEl(id);
+  if(!el){
+    el = document.createElement("div");
+    el.id = "node-"+id; el.className = "node "+cls;
+    stage.appendChild(el);
+  }
+  el.innerHTML = html;
+  return el;
+}
+function moveNode(id, pt){
+  const el = nodeEl(id); if(!el) return;
+  el.style.left = pt.x+"px"; el.style.top = pt.y+"px";
+}
+
+function placeNodes(){
+  // producer
+  ensureNode("producer",
+    `<div class="endpoint"><div class="ic">📤</div>
+     <div class="lbl">Producer</div><div class="sub">client app</div></div>`,"");
+  moveNode("producer", layout.producer);
+
+  // brokers
+  renderBrokerCard(0); moveNode("b0", layout.b0);
+  renderBrokerCard(1); moveNode("b1", layout.b1);
+
+  // consumers
+  if(mode==="queue"){
+    ["s0","s1","s2"].forEach(s=>{const e=nodeEl(s);if(e)e.style.display="none";});
+    const e=ensureNode("consumer",
+      `<div class="endpoint"><div class="ic">📥</div>
+       <div class="lbl">Consumer</div><div class="sub" id="consSub">waiting…</div></div>`,"");
+    e.style.display=""; moveNode("consumer", layout.consumer);
+  }else{
+    const c=nodeEl("consumer"); if(c)c.style.display="none";
+    const subs=[["s0","Subscriber A"],["s1","Subscriber B"],["s2","Subscriber C"]];
+    subs.forEach(([id,nm])=>{
+      const e=ensureNode(id,
+        `<div class="endpoint"><div class="ic">📥</div>
+         <div class="lbl">${nm}</div><div class="sub">gets a copy</div></div>`,"");
+      e.style.display=""; moveNode(id, layout[id]);
+    });
+  }
+}
+
+function brokerById(id){ return last? last.brokers.find(b=>b.id===id):null; }
+
+function renderBrokerCard(id){
+  const b = brokerById(id) || {name:"Broker-"+id, pod:CFG?CFG.brokers[id].pod:"", online:false, active:false, queue:null};
+  let stCls="standby", stTxt="standby";
+  if(!b.online){stCls="offline";stTxt="offline";}
+  else if(b.active){stCls="active";stTxt="active";}
+  const q = b.queue||{messageCount:0,consumerCount:0,messagesAdded:0,messagesAcknowledged:0,deliveringCount:0,routed:0};
+  const cardCls = "broker "+(!b.online?"offline":(b.active?"active":""));
+  const html = `
+    <div class="${cardCls}">
+      <div class="pulse"></div>
+      <div class="top">
+        <div>
+          <div class="nm">🗄️ ${b.name}</div>
+          <div class="pod">${b.pod||""}</div>
+        </div>
+        <span class="st ${stCls}">${stTxt}</span>
+      </div>
+      <div class="grid2">
+        <div class="met hl"><div class="v">${q.routed}</div><div class="k">routed (passed here)</div></div>
+        <div class="met"><div class="v">${q.messageCount}</div><div class="k">in queue</div></div>
+        <div class="met"><div class="v">${q.consumerCount}</div><div class="k">consumers</div></div>
+        <div class="met"><div class="v">${q.messagesAcknowledged}</div><div class="k">delivered</div></div>
+      </div>
+    </div>`;
+  ensureNode("b"+id, html, "");
+}
+
+// ---------- paths (SVG) ----------
+function lineEl(a,b,cls){
+  const p=document.createElementNS(NS,"path");
+  p.setAttribute("d",`M ${a.x} ${a.y} L ${b.x} ${b.y}`);
+  p.setAttribute("fill","none");
+  p.setAttribute("stroke", cls==="cluster"?"rgba(255,176,32,.55)":"rgba(255,255,255,.13)");
+  p.setAttribute("stroke-width", cls==="cluster"?"2.4":"2");
+  if(cls==="cluster"){p.setAttribute("stroke-dasharray","7 7");p.classList.add("flow");}
+  return p;
+}
+function drawPaths(){
+  pathsG.innerHTML="";
+  pathsG.appendChild(lineEl(layout.producer, layout.b0));
+  pathsG.appendChild(lineEl(layout.producer, layout.b1));
+  // cluster link
+  pathsG.appendChild(lineEl(layout.b0, layout.b1, "cluster"));
+  if(mode==="queue"){
+    pathsG.appendChild(lineEl(layout.b0, layout.consumer));
+    pathsG.appendChild(lineEl(layout.b1, layout.consumer));
+  }else{
+    ["s0","s1","s2"].forEach(s=>{
+      pathsG.appendChild(lineEl(layout.b0, layout[s]));
+    });
+  }
+}
+
+// ---------- dots / animation ----------
+function spawnDot(route, color, speed){
+  // route: array de pontos {x,y}; speed px/s
+  const segs=[]; let total=0;
+  for(let i=0;i<route.length-1;i++){
+    const a=route[i], b=route[i+1];
+    const len=Math.hypot(b.x-a.x,b.y-a.y);
+    segs.push({a,b,len}); total+=len;
+  }
+  if(total<1) return;
+  const el=document.createElementNS(NS,"circle");
+  el.setAttribute("r","5.5"); el.setAttribute("fill",color);
+  el.setAttribute("filter","url(#glow)");
+  dotsG.appendChild(el);
+  dots.push({el,segs,total,dist:0,speed:speed||230,color,onEnd:null});
+}
+
+function fanOutDot(color){
+  // topic: publish to b0 and fan out copies to the subscribers
+  const pubRoute=[layout.producer, layout.b0];
+  // dot from the producer to the broker, then fan-out
+  const segs=[]; let total=0;
+  for(let i=0;i<pubRoute.length-1;i++){
+    const a=pubRoute[i],b=pubRoute[i+1];const len=Math.hypot(b.x-a.x,b.y-a.y);
+    segs.push({a,b,len});total+=len;
+  }
+  const el=document.createElementNS(NS,"circle");
+  el.setAttribute("r","6"); el.setAttribute("fill",color);
+  el.setAttribute("filter","url(#glow)");
+  dotsG.appendChild(el);
+  dots.push({el,segs,total,dist:0,speed:240,color,onEnd:()=>{
+    ["s0","s1","s2"].forEach(s=> spawnDot([layout.b0, layout[s]], color, 260));
+  }});
+}
+
+function migrateBurst(fromId,toId,n){
+  const from = fromId===0?layout.b0:layout.b1;
+  const to   = toId===0?layout.b0:layout.b1;
+  for(let i=0;i<n;i++){
+    setTimeout(()=> spawnDot([from,to], COLORS.migrate, 180), i*120);
+  }
+}
+
+let lastTs=performance.now();
+function animate(now){
+  const dt=Math.min(.05,(now-lastTs)/1000); lastTs=now;
+  for(let i=dots.length-1;i>=0;i--){
+    const d=dots[i]; d.dist += d.speed*dt;
+    if(d.dist>=d.total){
+      if(d.onEnd) d.onEnd();
+      d.el.remove(); dots.splice(i,1); continue;
+    }
+    // position along the segments
+    let rem=d.dist;
+    for(const s of d.segs){
+      if(rem<=s.len){
+        const t=rem/s.len;
+        d.el.setAttribute("cx", s.a.x+(s.b.x-s.a.x)*t);
+        d.el.setAttribute("cy", s.a.y+(s.b.y-s.a.y)*t);
+        break;
+      }
+      rem-=s.len;
+    }
+  }
+  requestAnimationFrame(animate);
+}
+
+// ---------- flow logic from real data ----------
+function pickIngress(){
+  // the broker the producer publishes to. To highlight the cluster
+  // REDISTRIBUTION, we prefer an online broker different from the egress (where
+  // the consumer is). On failover (only one left), it falls back to the egress.
+  const on = last.brokers.filter(b=>b.online && b.active);
+  if(on.length===0) return null;
+  const egress = pickEgress();
+  const other = on.find(b=> !egress || b.id!==egress.id);
+  return other || on.sort((a,b)=>a.id-b.id)[0];
+}
+function pickEgress(){
+  const on = last.brokers.filter(b=>b.online && b.active);
+  const withCons = on.filter(b=>b.queue && b.queue.consumerCount>0);
+  if(withCons.length) return withCons.sort((a,b)=>b.queue.consumerCount-a.queue.consumerCount)[0];
+  return on.length? on.sort((a,b)=>a.id-b.id)[0] : null;
+}
+
+function routeFor(ingressId, egressId){
+  const a = ingressId===0?layout.b0:layout.b1;
+  const route=[layout.producer, a];
+  if(egressId!==ingressId){
+    route.push(egressId===0?layout.b0:layout.b1);
+  }
+  route.push(layout.consumer);
+  return route;
+}
+
+function onState(st){
+  const wasOffline = {...offlineSince};
+  last = st;
+  // detect failure/recovery transitions
+  st.brokers.forEach(b=>{
+    const downNow = !b.online;
+    if(downNow && !wasOffline[b.id]){
+      offlineSince[b.id]=true;
+      const surv = b.id===0?1:0;
+      showBanner(`⚠ ${b.name} OFFLINE — failover to Broker-${surv}`);
+      migrateBurst(b.id, surv, 8);
+      toast(`${b.name} down — cluster rerouting traffic`);
+    }else if(!downNow && wasOffline[b.id]){
+      offlineSince[b.id]=false;
+      hideBanner();
+      toast(`${b.name} recovered and back in the cluster`);
+    }
+  });
+
+  // re-render cards + positions
+  st.brokers.forEach(b=> renderBrokerCard(b.id));
+  moveNode("b0",layout.b0); moveNode("b1",layout.b1);
+
+  // consumer sub label (queue)
+  const egress = pickEgress();
+  const csub=document.getElementById("consSub");
+  if(csub) csub.textContent = egress? `reading from ${egress.name}` : "no broker";
+
+  // spawn de dots conforme delta REAL de mensagens entregues
+  if(mode==="queue") spawnFromDeltas();
+  else spawnTopic();
+
+  // store counters for the next delta
+  prev={};
+  st.brokers.forEach(b=> prev[b.id]={
+    added:b.queue?b.queue.messagesAdded:0,
+    ack:b.queue?b.queue.messagesAcknowledged:0,
+    routed:b.queue?b.queue.routed:0,
+    topicRouted:b.topic?b.topic.routedMessageCount:0
+  });
+
+  updateNarration();
+  updateConn(true);
+}
+
+function spawnFromDeltas(){
+  const ingress = pickIngress(), egress = pickEgress();
+  if(!ingress || !egress) return;
+  // usa o delta de entregues (ack) no egress como "throughput"
+  const eb = last.brokers.find(b=>b.id===egress.id);
+  const ib = last.brokers.find(b=>b.id===ingress.id);
+  const dAck = (eb.queue?eb.queue.messagesAcknowledged:0) - ((prev[egress.id]||{}).ack||0);
+  const dRouted = (ib.queue?ib.queue.routed:0) - ((prev[ingress.id]||{}).routed||0);
+  const n = Math.max(0, Math.min(8, Math.max(dRouted, dAck)));
+  const route = routeFor(ingress.id, egress.id);
+  for(let i=0;i<n;i++) setTimeout(()=> spawnDot(route, COLORS.queue, 250), i*130);
+  // if nothing flowed but a producer is active, a light pulse could be sent for "life"
+  if(n===0 && last.brokers.some(b=>b.online&&b.active)) {
+    // nothing
+  }
+}
+function spawnTopic(){
+  // REAL topic: use the multicast address RoutedMessageCount (true fan-out).
+  const tb = last.brokers.find(b=>b.online && b.topic);
+  if(!tb){
+    // no real multicast address yet: light illustrative pulse for "life"
+    if(last.brokers.some(b=>b.online&&b.active)) fanOutDot(COLORS.topic);
+    return;
+  }
+  const dRouted = (tb.topic.routedMessageCount||0) - ((prev[tb.id]||{}).topicRouted||0);
+  const n = Math.max(0, Math.min(6, dRouted));
+  for(let i=0;i<n;i++) setTimeout(()=> fanOutDot(COLORS.topic), i*160);
+}
+
+// ---------- narration ----------
+function updateNarration(){
+  const on = last.brokers.filter(b=>b.online);
+  const off = last.brokers.filter(b=>!b.online);
+  const ingress = pickIngress(), egress = pickEgress();
+  let txt="";
+  if(off.length){
+    const surv = on[0];
+    txt = `<b>${off.map(b=>b.name).join(", ")} OFFLINE.</b> The cluster keeps the service running on <b>${surv?surv.name:"—"}</b>. Messages persisted on the volume are not lost; when the pod comes back, it re-attaches the PVC and the journal is preserved.`;
+  }else if(mode==="topic"){
+    txt = last.topicLive
+      ? `<b>Topic mode (multicast).</b> The producer publishes to <b>${ingress?ingress.name:"—"}</b> and <b>every subscriber gets a copy</b> of each message.`
+      : `<b>Topic mode (multicast) — illustrative.</b> Shows the pub/sub fan-out: 1 publish → N subscribers. (I can create a real topic <code>${last.topic}</code> once <code>oc</code> reconnects.)`;
+  }else{
+    const totAck = last.brokers.reduce((s,b)=>s+(b.queue?b.queue.messagesAcknowledged:0),0);
+    if(ingress && egress && ingress.id!==egress.id){
+      txt = `Producer publishes to <b>${ingress.name}</b>; the consumer is on <b>${egress.name}</b>. The <b>cluster redistributes</b> messages between brokers automatically. <b>${totAck}</b> delivered in total.`;
+    }else{
+      txt = `Point-to-point flow through queue <b>${last.queue}</b>. <b>${totAck}</b> messages delivered. Each message goes to <b>one</b> consumer.`;
+    }
+  }
+  narration=txt; $("#narr").innerHTML=txt;
+}
+
+// ---------- UI helpers ----------
+let toastT=null;
+function toast(msg){
+  const t=$("#toast"); t.textContent=msg; t.classList.add("show");
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),3200);
+}
+function showBanner(msg){const b=$("#banner");b.innerHTML=msg;b.classList.add("show");}
+function hideBanner(){$("#banner").classList.remove("show");}
+function updateConn(ok){
+  $("#connDot").className="dot "+(ok?"ok":"bad");
+  $("#connTxt").textContent= ok? "live · Jolokia":"disconnected";
+}
+
+// ---------- modes ----------
+const HINTS={
+  queue:"Point-to-point: each message is delivered to <b>one</b> consumer. Multiple consumers compete (load balancing). Equivalent to a JMS Queue.",
+  topic:"Publish/Subscribe: <b>every subscriber gets a copy</b> of each message. Ideal for broadcasting events. Equivalent to a JMS Topic."
+};
+function setMode(m){
+  mode=m;
+  document.querySelectorAll("#modeSeg button").forEach(b=>b.classList.toggle("on",b.dataset.mode===m));
+  $("#modeHint").innerHTML=HINTS[m];
+  dots.forEach(d=>d.el.remove()); dots=[];
+  placeNodes(); drawPaths();
+  if(last) updateNarration();
+}
+
+// ---------- actions ----------
+async function doAction(act,id){
+  toast("Running: "+act+" on broker "+id+"…");
+  try{
+    const r=await fetch(`/api/action/${act}/${id}`,{method:"POST"});
+    const j=await r.json();
+    if(j.ok){ toast("OK — watch the animation react to the real data."); }
+    else if(j.needsLogin){ toast("oc login expired. Run manually: "+j.manual); }
+    else { toast("Failed: "+(j.output||j.error||"error")); }
+  }catch(e){ toast("Error: "+e.message); }
+}
+
+// ---------- polling ----------
+async function poll(){
+  try{
+    const r=await fetch("/api/state",{cache:"no-store"});
+    const st=await r.json();
+    onState(st);
+  }catch(e){
+    updateConn(false);
+    $("#narr").innerHTML="No connection to the backend. Is the Python server running?";
+  }
+}
+
+// ---------- init ----------
+async function init(){
+  try{ CFG=await (await fetch("/api/config")).json(); }catch(e){}
+  $("#foot").innerHTML = CFG
+    ? `Brokers: <code>${CFG.brokers[0].console}</code> · <code>${CFG.brokers[1].console}</code> — namespace <code>${CFG.namespace}</code>`
+    : "";
+  computeLayout();
+  setMode("queue");
+  requestAnimationFrame(animate);
+  await poll();
+  setInterval(poll, 1000);
+}
+window.addEventListener("resize", ()=>{ computeLayout(); if(last){st_re();} });
+function st_re(){ last.brokers.forEach(b=>renderBrokerCard(b.id)); moveNode("b0",layout.b0);moveNode("b1",layout.b1);}
+document.querySelectorAll("#modeSeg button").forEach(b=> b.onclick=()=>setMode(b.dataset.mode));
+document.querySelectorAll("[data-act]").forEach(b=> b.onclick=()=>doAction(b.dataset.act, b.dataset.id));
+init();
+</script>
+</body>
+</html>

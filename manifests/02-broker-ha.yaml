@@ -1,0 +1,47 @@
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemis
+metadata:
+  name: demo-broker
+  namespace: amq-demo
+spec:
+  # 2-broker cluster for HA + load balancing
+  deploymentPlan:
+    size: 2
+    image: placeholder
+    requireLogin: true
+    persistenceEnabled: true
+    # When a broker goes down, its messages migrate to the surviving broker
+    messageMigration: true
+    journalType: nio
+    storage:
+      size: 2Gi
+    jolokiaAgentEnabled: false
+    managementRBACEnabled: true
+    resources:
+      requests:
+        cpu: "250m"
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    # Spread pods across different nodes (anti-affinity) for real HA
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  ActiveMQArtemis: demo-broker
+              topologyKey: kubernetes.io/hostname
+  # Application user
+  adminUser: admin
+  adminPassword: admin
+  # Acceptor AMQP/Core para as aplicacoes
+  acceptors:
+    - name: all
+      protocols: core,amqp,openwire
+      port: 61616
+      sslEnabled: false
+  console:
+    expose: true

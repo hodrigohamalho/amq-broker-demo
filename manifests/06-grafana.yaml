@@ -1,0 +1,119 @@
+# Instancia do Grafana (gerenciada pelo grafana-operator)
+apiVersion: grafana.integreatly.org/v1beta1
+kind: Grafana
+metadata:
+  name: amq-grafana
+  namespace: amq-demo
+  labels:
+    dashboards: amq-grafana
+spec:
+  config:
+    log:
+      mode: "console"
+    auth:
+      disable_login_form: "false"
+    auth.anonymous:
+      enabled: "true"
+      org_role: "Admin"
+    security:
+      admin_user: "admin"
+      admin_password: "admin"
+---
+# Datasource: aponta para o Thanos Querier do cluster (User Workload Monitoring)
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: amq-prometheus
+  namespace: amq-demo
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: amq-grafana
+  valuesFrom:
+    - targetPath: secureJsonData.httpHeaderValue1
+      valueFrom:
+        secretKeyRef:
+          name: grafana-reader-token
+          key: token
+  datasource:
+    name: Prometheus
+    uid: amqprometheus
+    type: prometheus
+    access: proxy
+    url: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
+    isDefault: true
+    jsonData:
+      httpHeaderName1: "Authorization"
+      tlsSkipVerify: true
+      timeInterval: "5s"
+    secureJsonData:
+      httpHeaderValue1: "Bearer ${token}"
+---
+# Dashboard AMQ Broker
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: amq-broker-dashboard
+  namespace: amq-demo
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: amq-grafana
+  datasources:
+    - inputName: "DS_PROMETHEUS"
+      datasourceName: "Prometheus"
+  json: |
+    {
+      "title": "Red Hat AMQ Broker - HA Demo",
+      "uid": "amq-broker-demo",
+      "schemaVersion": 39,
+      "timezone": "browser",
+      "refresh": "5s",
+      "time": { "from": "now-15m", "to": "now" },
+      "templating": { "list": [] },
+      "panels": [
+        {
+          "type": "stat", "title": "Active brokers",
+          "gridPos": {"h":4,"w":6,"x":0,"y":0},
+          "fieldConfig":{"defaults":{"color":{"mode":"thresholds"},"thresholds":{"steps":[{"color":"red","value":null},{"color":"green","value":1}]}}},
+          "targets":[{"datasource":{"type":"prometheus","uid":"amqprometheus"},"expr":"count(artemis_active{namespace=\"amq-demo\"} == 1)"}]
+        },
+        {
+          "type": "stat", "title": "Consumers on demoQueue",
+          "gridPos": {"h":4,"w":6,"x":6,"y":0},
+          "targets":[{"datasource":{"type":"prometheus","uid":"amqprometheus"},"expr":"sum(artemis_consumer_count{namespace=\"amq-demo\",queue=\"demoQueue\"})"}]
+        },
+        {
+          "type": "stat", "title": "Messages in queue (total)",
+          "gridPos": {"h":4,"w":6,"x":12,"y":0},
+          "targets":[{"datasource":{"type":"prometheus","uid":"amqprometheus"},"expr":"sum(artemis_message_count{namespace=\"amq-demo\",queue=\"demoQueue\"})"}]
+        },
+        {
+          "type": "stat", "title": "Inbound rate (msg/s)",
+          "gridPos": {"h":4,"w":6,"x":18,"y":0},
+          "fieldConfig":{"defaults":{"unit":"reqps"}},
+          "targets":[{"datasource":{"type":"prometheus","uid":"amqprometheus"},"expr":"sum(rate(artemis_messages_added{namespace=\"amq-demo\",queue=\"demoQueue\"}[1m]))"}]
+        },
+        {
+          "type": "timeseries", "title": "Messages in queue per broker (pod)",
+          "gridPos": {"h":9,"w":12,"x":0,"y":4},
+          "targets":[{"datasource":{"type":"prometheus","uid":"amqprometheus"},"expr":"artemis_message_count{namespace=\"amq-demo\",queue=\"demoQueue\"}","legendFormat":"{{pod}}"}]
+        },
+        {
+          "type": "timeseries", "title": "Total messages added per broker (pod)",
+          "gridPos": {"h":9,"w":12,"x":12,"y":4},
+          "targets":[{"datasource":{"type":"prometheus","uid":"amqprometheus"},"expr":"artemis_messages_added{namespace=\"amq-demo\",queue=\"demoQueue\"}","legendFormat":"{{pod}}"}]
+        },
+        {
+          "type": "timeseries", "title": "Consumers per broker (pod)",
+          "gridPos": {"h":8,"w":12,"x":0,"y":13},
+          "targets":[{"datasource":{"type":"prometheus","uid":"amqprometheus"},"expr":"artemis_consumer_count{namespace=\"amq-demo\",queue=\"demoQueue\"}","legendFormat":"{{pod}}"}]
+        },
+        {
+          "type": "timeseries", "title": "Aggregate inbound rate (msg/s)",
+          "gridPos": {"h":8,"w":12,"x":12,"y":13},
+          "fieldConfig":{"defaults":{"unit":"reqps"}},
+          "targets":[{"datasource":{"type":"prometheus","uid":"amqprometheus"},"expr":"sum(rate(artemis_messages_added{namespace=\"amq-demo\",queue=\"demoQueue\"}[1m]))","legendFormat":"entrada"}]
+        }
+      ]
+    }
