@@ -55,6 +55,12 @@ Stop with `Ctrl+C`.
 | `QUEUE` | `demoQueue` |
 | `TOPIC` | `demoTopic` |
 | `NAMESPACE` / `BROKER_CR` | `amq-demo` / `demo-broker` |
+| `DEMO_DATA` | unset — set to `1` to serve realistic synthetic data (no cluster needed) |
+
+Preview without a cluster:
+```bash
+DEMO_DATA=1 python3 server.py    # open http://localhost:8080
+```
 
 Example pointing at another cluster:
 ```bash

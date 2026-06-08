@@ -32,6 +32,29 @@ animates the whole story — no `oc` required to *watch* (only to trigger failur
 
 ---
 
+## See it in action
+
+The web visualizer reads **live broker metrics** (via Jolokia) and animates the
+whole story — messages flowing, redistribution, fan-out, and failover.
+
+### Queue (anycast) — load balancing & cluster redistribution
+![Queue mode](docs/images/queue-mode.png)
+The producer publishes to **Broker-0**; the consumer reads from **Broker-1**. The
+cluster redistributes messages automatically — note `routed` climbing on *both*
+brokers while the dots flow Producer → Broker-0 → Broker-1 → Consumer.
+
+### Topic (multicast) — publish/subscribe fan-out
+![Topic mode](docs/images/topic-mode.png)
+One publish becomes **a copy for every subscriber** (A, B, C).
+
+### Failover — a broker goes down, the flow keeps running
+![Failover](docs/images/failover.png)
+Broker-0 is **OFFLINE**; the producer and consumer fail over to **Broker-1** and keep
+working with **no message loss** (messages persisted on the PVC survive).
+
+> 💡 No cluster handy? Run the visualizer with `DEMO_DATA=1` to preview the UI with
+> realistic synthetic data (the screenshots above were captured that way).
+
 ## Prerequisites
 
 - An OpenShift cluster (4.x) and `oc`, logged in with cluster-admin (the demos

@@ -167,7 +167,39 @@ def read_broker(b):
     return out
 
 
+# DEMO_DATA mode: serve synthetic-but-realistic state so the UI is alive without a
+# live cluster (great for screenshots and for trying the app before deploying).
+DEMO = os.environ.get("DEMO_DATA", "").lower() in ("1", "true", "yes", "on")
+_demo = {"r0": 480, "r1": 1190, "ack1": 1188, "troute": 240}
+
+
+def demo_state():
+    # advance counters to simulate a steady ~5 msg/s flow between polls
+    _demo["r0"] += 5
+    _demo["r1"] += 5
+    _demo["ack1"] += 5
+    _demo["troute"] += 3
+    b0 = {"id": 0, "name": "Broker-0", "pod": "demo-broker-ss-0",
+          "online": True, "active": True,
+          "queue": {"messageCount": 0, "consumerCount": 0, "messagesAdded": 15,
+                    "messagesAcknowledged": 0, "deliveringCount": 0,
+                    "routed": _demo["r0"]},
+          "topic": {"messageCount": 0, "routedMessageCount": _demo["troute"],
+                    "subscriptions": 3}}
+    b1 = {"id": 1, "name": "Broker-1", "pod": "demo-broker-ss-1",
+          "online": True, "active": True,
+          "queue": {"messageCount": 0, "consumerCount": 1,
+                    "messagesAdded": _demo["r1"],
+                    "messagesAcknowledged": _demo["ack1"], "deliveringCount": 0,
+                    "routed": _demo["r1"]},
+          "topic": None}
+    return {"queue": CFG["queue"], "topic": CFG["topic"],
+            "topicLive": True, "brokers": [b0, b1]}
+
+
 def get_state():
+    if DEMO:
+        return demo_state()
     brokers = list(_POOL.map(read_broker, BROKERS))
     brokers.sort(key=lambda x: x["id"])
     topic_live = any(b.get("topic") for b in brokers)
