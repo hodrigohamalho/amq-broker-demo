@@ -17,6 +17,11 @@ broker failure.
 |---|---|---|---|
 | **A — PV cluster** (`amq-demo`) | File journal on a PVC (per broker) | **Active/Active cluster** + message redistribution & migration | Queues vs Topics, load balancing, message migration, fast client failover |
 | **B — JDBC** (`amq-jdbc-demo`) | **PostgreSQL** via JDBC | **Shared-store** (primary/backup, lock in the DB) | When to use a database, shared-store failover, the trade-offs vs the journal |
+| **C — DR mirroring** (`amq-dr`) | File journal (per site) | **Async AMQP mirror** to a DR site | Cross-site disaster recovery, warm standby, no data loss on site failure |
+| **D — Active/active 2 sites** (`amq-aa`) | File journal (per site) | **Bidirectional (dual) AMQP mirror** | Active/active across sites (like Kafka MM2), convergence, site-failure DR |
+
+> Designing HA/DR? See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the full comparison
+> (replication vs clustering vs dual mirror, client failover & external LB).
 
 Plus the **Web Visualizer** that reads each broker's real metrics via Jolokia and
 animates the whole story — no `oc` required to *watch* (only to trigger failures).
@@ -51,6 +56,16 @@ One publish becomes **a copy for every subscriber** (A, B, C).
 ![Failover](docs/images/failover.png)
 Broker-0 is **OFFLINE**; the producer and consumer fail over to **Broker-1** and keep
 working with **no message loss** (messages persisted on the PVC survive).
+
+### DR mode — active/active across two sites (dual mirror)
+![DR mode](docs/images/dr-mode.png)
+Both sites are **ACTIVE** and their queues **converge** (~432 ≈ 432) via the
+bidirectional mirror — replication flows both ways (`mirror ▶` / `◀ mirror`).
+
+### DR failover — a site goes down, the other already has the data
+![DR failover](docs/images/dr-failover.png)
+**Site 1 OFFLINE**; Site 2 keeps serving and already holds a converged copy — **no
+data lost**. The mirror re-syncs when the site returns.
 
 > 💡 No cluster handy? Run the visualizer with `DEMO_DATA=1` to preview the UI with
 > realistic synthetic data (the screenshots above were captured that way).
@@ -123,6 +138,74 @@ HAPolicyConfiguration=SHARED_STORE_PRIMARY
 > separate database/schema per broker.
 
 ---
+
+## Scenario C — Disaster Recovery via AMQP Mirroring
+
+A **primary** broker (Site A) asynchronously **mirrors** everything — messages,
+acknowledgements, and queue create/remove — to a **DR** broker (Site B) over an AMQP
+broker connection. The DR broker keeps a warm copy of the data, so if the primary
+site is lost you recover from it with no message loss. In production the two brokers
+live in separate clusters/sites; here two CRs in the `amq-dr` namespace illustrate it.
+
+```bash
+oc apply -f manifests/dr/01-operator.yaml      # Operator in the amq-dr namespace
+oc apply -f manifests/dr/02-brokers-dr.yaml    # dr-primary (mirror) + dr-backup + queue
+oc apply -f manifests/dr/03-apps.yaml          # producer + consumer on the primary
+oc apply -f manifests/dr/04-console-routes.yaml
+```
+
+The mirror is configured on the primary via `spec.brokerProperties`:
+```
+AMQPConnections.dr.uri=tcp://dr-backup-all-0-svc.amq-dr.svc.cluster.local:61616
+AMQPConnections.dr.connectionElements.mirror.type=MIRROR
+AMQPConnections.dr.connectionElements.mirror.messageAcknowledgements=true
+AMQPConnections.dr.connectionElements.mirror.queueCreation=true
+```
+
+**Demo it:**
+```bash
+./scripts/dr-failover.sh
+```
+It pauses the consumer so messages pile up (and mirror to the DR broker), shows the
+**same messages on both brokers**, simulates the **loss of the primary site**, and
+**recovers by consuming from the DR broker** — proving zero data loss — then restores
+the primary.
+
+> Mirroring is **asynchronous and one-way** (Site A → Site B): ideal for DR / warm
+> standby, not a synchronous replica. After a real failover, *failback* (re-syncing
+> Site A) is a deliberate, separate step. For in-cluster HA, use Scenario A.
+
+## Scenario D — Active/Active across two sites (dual mirror)
+
+Two sites, each with its **own PV**, replicating to each other with a **bidirectional
+(dual) AMQP mirror**. Both sites accept producers; messages **and** acknowledgements
+are mirrored **both ways**, so the two queues **converge**. Loop prevention and
+broker-side duplicate detection are automatic. This is the AMQ equivalent of a Kafka
+MirrorMaker 2 active/active setup.
+
+```bash
+oc apply -f manifests/active-active/01-operator.yaml      # Operator in the amq-aa namespace
+oc apply -f manifests/active-active/02-brokers.yaml        # site1-broker <== dual mirror ==> site2-broker
+oc apply -f manifests/active-active/03-apps.yaml           # a producer on EACH site
+oc apply -f manifests/active-active/04-console-routes.yaml
+```
+
+The mirror is configured on each broker via `spec.brokerProperties`, e.g. on site 1:
+```
+AMQPConnections.toSite2.uri=tcp://site2-broker-all-0-svc.amq-aa.svc.cluster.local:61616
+AMQPConnections.toSite2.connectionElements.mirror.type=MIRROR
+AMQPConnections.toSite2.connectionElements.mirror.messageAcknowledgements=true
+```
+(site 2 has the symmetric `toSite1` connection.)
+
+**Demo it** in the visualizer's **DR mode** (see below): both queues stay converged;
+click *Simulate Site 1 failure* and Site 2 keeps serving with a converged copy — no
+data lost. Then *Restore both sites* and the mirror re-syncs.
+
+> ⚠️ The mirror is **asynchronous** → with consumers on both sites you get
+> at-least-once with a possible duplicate window (same trade-off as Kafka MM2), **not**
+> global exactly-once. Use idempotent consumers / dedup. Full discussion in
+> [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## The Web Visualizer
 
@@ -231,6 +314,9 @@ RDBMS requirements, accepting the throughput trade-off.
 ```
 manifests/                 Scenario A (PV cluster) — Operator, broker, queue, apps, topic
 manifests/jdbc/            Scenario B (JDBC/PostgreSQL shared-store)
+manifests/dr/              Scenario C (Disaster Recovery via AMQP mirroring)
+manifests/active-active/   Scenario D (active/active two sites, dual mirror)
+ARCHITECTURE.md            HA & DR design guide (replication vs clustering vs mirror)
 build/jdbc/Dockerfile      Custom broker image with the PostgreSQL JDBC driver
 scripts/                   Helper scripts (queue-stats, failover-demo, cleanup)
 webapp/                    The live visualizer (server.py + index.html + Containerfile)
@@ -243,6 +329,10 @@ webapp/                    The live visualizer (server.py + index.html + Contain
 ./scripts/cleanup.sh --all   # also remove the Operator and namespace
 # Scenario B:
 oc delete project amq-jdbc-demo
+# Scenario C:
+oc delete project amq-dr
+# Scenario D:
+oc delete project amq-aa
 ```
 
 ---

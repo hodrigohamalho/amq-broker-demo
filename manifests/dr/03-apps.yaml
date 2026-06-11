@@ -1,0 +1,57 @@
+# Producer + consumer run against the PRIMARY (Site A). Everything they do is
+# mirrored to the DR broker (Site B) in the background. On a site-DR event you
+# repoint a consumer at dr-backup (see scripts/dr-failover.sh).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dr-producer
+  namespace: amq-dr
+  labels: { app: dr-producer, demo: amq-dr }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: dr-producer } }
+  template:
+    metadata:
+      labels: { app: dr-producer, demo: amq-dr }
+    spec:
+      containers:
+        - name: producer
+          image: registry.redhat.io/amq7/amq-broker-rhel9@sha256:ec6a178d76a1521ea68ef312b43db6b952802d02431ad81f1b9bd107015c621d
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              echo "[DR-PRODUCER] publishing to demoQueue on dr-primary (mirrored to DR)";
+              while true; do
+                /opt/amq/bin/artemis producer \
+                  --url tcp://dr-primary-all-0-svc:61616 \
+                  --user admin --password admin \
+                  --destination queue://demoQueue \
+                  --message-count 5 --sleep 3000 --message-size 256;
+                echo "[DR-PRODUCER] batch sent at $(date '+%H:%M:%S')";
+              done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dr-consumer
+  namespace: amq-dr
+  labels: { app: dr-consumer, demo: amq-dr }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: dr-consumer } }
+  template:
+    metadata:
+      labels: { app: dr-consumer, demo: amq-dr }
+    spec:
+      containers:
+        - name: consumer
+          image: registry.redhat.io/amq7/amq-broker-rhel9@sha256:ec6a178d76a1521ea68ef312b43db6b952802d02431ad81f1b9bd107015c621d
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              echo "[DR-CONSUMER] consuming from demoQueue on dr-primary";
+              /opt/amq/bin/artemis consumer \
+                --url tcp://dr-primary-all-0-svc:61616 \
+                --user admin --password admin \
+                --destination queue://demoQueue \
+                --message-count 100000 --receive-timeout 60000 --verbose

@@ -1,0 +1,93 @@
+# Active/Active across two sites via BIDIRECTIONAL (dual) AMQP mirroring.
+#   site1-broker  <== dual mirror ==>  site2-broker
+# Each broker has its OWN PV (no shared store). Both sites accept producers and
+# consumers; everything (messages + acks + queue create/remove) is mirrored both
+# ways. Loop prevention + broker-side duplicate detection are automatic, so the
+# two queues converge without infinite loops.
+# In production each "site" would be a CLUSTER of N brokers in a separate cluster;
+# here one broker per site keeps the bidirectional semantics clean to observe.
+---
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemis
+metadata:
+  name: site1-broker
+  namespace: amq-aa
+spec:
+  deploymentPlan:
+    size: 1
+    image: placeholder
+    requireLogin: true
+    persistenceEnabled: true
+    journalType: nio
+    storage: { size: 1Gi }
+    resources:
+      requests: { cpu: "250m", memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+  adminUser: admin
+  adminPassword: admin
+  acceptors:
+    - name: all
+      protocols: core,amqp,openwire
+      port: 61616
+      sslEnabled: false
+  console: { expose: true }
+  # Dual mirror -> replicate to SITE 2
+  brokerProperties:
+    - "AMQPConnections.toSite2.uri=tcp://site2-broker-all-0-svc.amq-aa.svc.cluster.local:61616"
+    - "AMQPConnections.toSite2.user=admin"
+    - "AMQPConnections.toSite2.password=admin"
+    - "AMQPConnections.toSite2.retryInterval=5000"
+    - "AMQPConnections.toSite2.connectionElements.mirror.type=MIRROR"
+    - "AMQPConnections.toSite2.connectionElements.mirror.messageAcknowledgements=true"
+    - "AMQPConnections.toSite2.connectionElements.mirror.queueCreation=true"
+    - "AMQPConnections.toSite2.connectionElements.mirror.queueRemoval=true"
+    - "AMQPConnections.toSite2.connectionElements.mirror.durable=true"
+---
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemis
+metadata:
+  name: site2-broker
+  namespace: amq-aa
+spec:
+  deploymentPlan:
+    size: 1
+    image: placeholder
+    requireLogin: true
+    persistenceEnabled: true
+    journalType: nio
+    storage: { size: 1Gi }
+    resources:
+      requests: { cpu: "250m", memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+  adminUser: admin
+  adminPassword: admin
+  acceptors:
+    - name: all
+      protocols: core,amqp,openwire
+      port: 61616
+      sslEnabled: false
+  console: { expose: true }
+  # Dual mirror -> replicate to SITE 1
+  brokerProperties:
+    - "AMQPConnections.toSite1.uri=tcp://site1-broker-all-0-svc.amq-aa.svc.cluster.local:61616"
+    - "AMQPConnections.toSite1.user=admin"
+    - "AMQPConnections.toSite1.password=admin"
+    - "AMQPConnections.toSite1.retryInterval=5000"
+    - "AMQPConnections.toSite1.connectionElements.mirror.type=MIRROR"
+    - "AMQPConnections.toSite1.connectionElements.mirror.messageAcknowledgements=true"
+    - "AMQPConnections.toSite1.connectionElements.mirror.queueCreation=true"
+    - "AMQPConnections.toSite1.connectionElements.mirror.queueRemoval=true"
+    - "AMQPConnections.toSite1.connectionElements.mirror.durable=true"
+---
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemisAddress
+metadata:
+  name: aa-queue
+  namespace: amq-aa
+spec:
+  addressName: demoQueue
+  queueName: demoQueue
+  routingType: anycast
+  applyToCrNames:
+    - site1-broker
+    - site2-broker

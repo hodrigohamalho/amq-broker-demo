@@ -1,0 +1,22 @@
+# HTTPS console routes for the DR brokers (primary = Site A, backup = Site B).
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: dr-primary-console
+  namespace: amq-dr
+  labels: { demo: amq-dr }
+spec:
+  to: { kind: Service, name: dr-primary-wconsj-0-svc }
+  port: { targetPort: wconsj-0 }
+  tls: { termination: edge, insecureEdgeTerminationPolicy: Redirect }
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: dr-backup-console
+  namespace: amq-dr
+  labels: { demo: amq-dr }
+spec:
+  to: { kind: Service, name: dr-backup-wconsj-0-svc }
+  port: { targetPort: wconsj-0 }
+  tls: { termination: edge, insecureEdgeTerminationPolicy: Redirect }

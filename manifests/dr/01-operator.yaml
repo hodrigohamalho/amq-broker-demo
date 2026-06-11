@@ -1,22 +1,22 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: amq-demo
+  name: amq-dr
 ---
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
-  name: amq-demo-og
-  namespace: amq-demo
+  name: amq-dr-og
+  namespace: amq-dr
 spec:
   targetNamespaces:
-    - amq-demo
+    - amq-dr
 ---
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
   name: amq-broker-rhel9
-  namespace: amq-demo
+  namespace: amq-dr
 spec:
   channel: 7.14.x
   installPlanApproval: Automatic

@@ -65,6 +65,25 @@ BROKERS = [
     },
 ]
 
+# --- Active/Active two-site (dual mirror) DR scenario ---
+DR_NAMESPACE = os.environ.get("DR_NAMESPACE", "amq-aa")
+SITES = [
+    {
+        "id": 1, "name": "Site 1", "cr": "site1-broker", "mirror": "toSite2",
+        "console": os.environ.get(
+            "SITE1_CONSOLE",
+            "https://site1-console-amq-aa.apps.cluster1.sandbox1992.opentlc.com",
+        ).rstrip("/"),
+    },
+    {
+        "id": 2, "name": "Site 2", "cr": "site2-broker", "mirror": "toSite1",
+        "console": os.environ.get(
+            "SITE2_CONSOLE",
+            "https://site2-console-amq-aa.apps.cluster1.sandbox1992.opentlc.com",
+        ).rstrip("/"),
+    },
+]
+
 _SSL = ssl.create_default_context()
 _SSL.check_hostname = False
 _SSL.verify_mode = ssl.CERT_NONE
@@ -211,6 +230,93 @@ def get_state():
     }
 
 
+# ---- Two-site dual-mirror (DR) state ----
+def _mirror_mbean(name):
+    q = f"$ACTIVEMQ_ARTEMIS_MIRROR_{name}"
+    return (f'org.apache.activemq.artemis:address="{q}",broker="amq-broker",'
+            f'component=addresses,queue="{q}",routing-type="anycast",'
+            f"subcomponent=queues")
+
+
+def read_site(site):
+    """Read a site's state: broker Active, demoQueue depth/routed, and the
+    outbound mirror queue MessagesAdded (= events replicated to the other site)."""
+    out = {"id": site["id"], "name": site["name"], "cr": site["cr"],
+           "mirror": site["mirror"], "online": False, "active": False,
+           "messageCount": 0, "routed": 0, "mirrorOut": 0}
+    batch = [
+        {"type": "read", "mbean": 'org.apache.activemq.artemis:broker="amq-broker"',
+         "attribute": "Active"},
+        {"type": "read", "mbean": _addr_mbean(CFG["queue"]),
+         "attribute": ["MessageCount", "RoutedMessageCount"]},
+        {"type": "read", "mbean": _mirror_mbean(site["mirror"]),
+         "attribute": ["MessagesAdded"]},
+    ]
+    res = _jolokia_post(site["console"], batch)
+    if not res or not isinstance(res, list):
+        return out
+    out["online"] = True
+    try:
+        if res[0].get("status") == 200:
+            out["active"] = bool(res[0].get("value"))
+    except Exception:
+        pass
+    try:
+        if res[1].get("status") == 200:
+            v = res[1]["value"]
+            out["messageCount"] = v.get("MessageCount", 0)
+            out["routed"] = v.get("RoutedMessageCount", 0)
+    except Exception:
+        pass
+    try:
+        if res[2].get("status") == 200:
+            out["mirrorOut"] = res[2]["value"].get("MessagesAdded", 0)
+    except Exception:
+        pass
+    return out
+
+
+_dr_demo = {"s1q": 18, "s2q": 21, "m12": 140, "m21": 150}
+
+
+def dr_demo_state():
+    _dr_demo["s1q"] += 2
+    _dr_demo["s2q"] += 2
+    _dr_demo["m12"] += 4
+    _dr_demo["m21"] += 3
+    return {"sites": [
+        {"id": 1, "name": "Site 1", "cr": "site1-broker", "mirror": "toSite2",
+         "online": True, "active": True, "messageCount": _dr_demo["s1q"],
+         "routed": _dr_demo["s1q"] + _dr_demo["m21"], "mirrorOut": _dr_demo["m12"]},
+        {"id": 2, "name": "Site 2", "cr": "site2-broker", "mirror": "toSite1",
+         "online": True, "active": True, "messageCount": _dr_demo["s2q"],
+         "routed": _dr_demo["s2q"] + _dr_demo["m12"], "mirrorOut": _dr_demo["m21"]},
+    ]}
+
+
+def get_dr_state():
+    if DEMO:
+        return dr_demo_state()
+    sites = list(_POOL.map(read_site, SITES))
+    sites.sort(key=lambda x: x["id"])
+    return {"sites": sites}
+
+
+def dr_action(kind, site_id):
+    ns = DR_NAMESPACE
+    site = next((s for s in SITES if s["id"] == site_id), None)
+    cr = site["cr"] if site else f"site{site_id}-broker"
+    size = "0" if kind == "kill" else "1"
+    if kind not in ("kill", "restore"):
+        return {"ok": False, "error": "unknown action"}
+    ok, out = run_oc(["patch", "activemqartemis", cr, "-n", ns, "--type", "merge",
+                      "-p", '{"spec":{"deploymentPlan":{"size":%s}}}' % size])
+    manual = ("oc patch activemqartemis %s -n %s --type merge "
+              "-p '{\"spec\":{\"deploymentPlan\":{\"size\":%s}}}'" % (cr, ns, size))
+    return {"ok": ok, "output": out, "manual": manual,
+            "needsLogin": (not ok and ("Unauthorized" in out or "login" in out.lower()))}
+
+
 def run_oc(args, timeout=20):
     """Run an oc command; returns (ok, text)."""
     try:
@@ -285,12 +391,23 @@ class Handler(BaseHTTPRequestHandler):
             })
         elif path == "/api/state":
             self._send(200, get_state())
+        elif path == "/api/dr-state":
+            self._send(200, get_dr_state())
         else:
             self._send(404, {"error": "not found"})
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path.startswith("/api/action/"):
+        if path.startswith("/api/dr-action/"):
+            parts = path.split("/")
+            # /api/dr-action/<kind>/<siteId>
+            kind = parts[3] if len(parts) > 3 else ""
+            try:
+                sid = int(parts[4]) if len(parts) > 4 else 1
+            except ValueError:
+                sid = 1
+            self._send(200, dr_action(kind, sid))
+        elif path.startswith("/api/action/"):
             parts = path.split("/")
             # /api/action/<kind>/<brokerId>
             kind = parts[3] if len(parts) > 3 else ""

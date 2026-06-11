@@ -1,0 +1,16 @@
+# HTTPS console routes for both sites (used by the visualizer and for the consoles).
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: { name: site1-console, namespace: amq-aa, labels: { demo: amq-aa } }
+spec:
+  to: { kind: Service, name: site1-broker-wconsj-0-svc }
+  port: { targetPort: wconsj-0 }
+  tls: { termination: edge, insecureEdgeTerminationPolicy: Redirect }
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: { name: site2-console, namespace: amq-aa, labels: { demo: amq-aa } }
+spec:
+  to: { kind: Service, name: site2-broker-wconsj-0-svc }
+  port: { targetPort: wconsj-0 }
+  tls: { termination: edge, insecureEdgeTerminationPolicy: Redirect }

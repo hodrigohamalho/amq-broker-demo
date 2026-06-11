@@ -1,0 +1,85 @@
+# DR via AMQP Mirroring.
+#   - dr-primary  (Site A): serves producers/consumers and ASYNC-mirrors everything
+#                  (messages, acks, queue create/remove) to the DR broker over AMQP.
+#   - dr-backup   (Site B / DR): receives the mirror; holds a warm copy of the data.
+# In production these would be two separate clusters/sites; here two CRs in one
+# namespace illustrate the pattern.
+---
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemis
+metadata:
+  name: dr-primary
+  namespace: amq-dr
+spec:
+  deploymentPlan:
+    size: 1
+    image: placeholder
+    requireLogin: true
+    persistenceEnabled: true
+    journalType: nio
+    storage:
+      size: 1Gi
+    resources:
+      requests: { cpu: "250m", memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+  adminUser: admin
+  adminPassword: admin
+  acceptors:
+    - name: all
+      protocols: core,amqp,openwire
+      port: 61616
+      sslEnabled: false
+  console:
+    expose: true
+  # AMQP Mirror broker-connection -> replicates to the DR broker (Site B)
+  brokerProperties:
+    - "AMQPConnections.dr.uri=tcp://dr-backup-all-0-svc.amq-dr.svc.cluster.local:61616"
+    - "AMQPConnections.dr.user=admin"
+    - "AMQPConnections.dr.password=admin"
+    - "AMQPConnections.dr.retryInterval=5000"
+    - "AMQPConnections.dr.connectionElements.mirror.type=MIRROR"
+    - "AMQPConnections.dr.connectionElements.mirror.messageAcknowledgements=true"
+    - "AMQPConnections.dr.connectionElements.mirror.queueCreation=true"
+    - "AMQPConnections.dr.connectionElements.mirror.queueRemoval=true"
+    - "AMQPConnections.dr.connectionElements.mirror.durable=true"
+---
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemis
+metadata:
+  name: dr-backup
+  namespace: amq-dr
+spec:
+  deploymentPlan:
+    size: 1
+    image: placeholder
+    requireLogin: true
+    persistenceEnabled: true
+    journalType: nio
+    storage:
+      size: 1Gi
+    resources:
+      requests: { cpu: "250m", memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+  adminUser: admin
+  adminPassword: admin
+  acceptors:
+    - name: all
+      protocols: core,amqp,openwire
+      port: 61616
+      sslEnabled: false
+  console:
+    expose: true
+---
+# Pre-create the queue on the primary (mirror also auto-creates it on the DR broker)
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemisAddress
+metadata:
+  name: dr-queue
+  namespace: amq-dr
+spec:
+  addressName: demoQueue
+  queueName: demoQueue
+  routingType: anycast
+  applyToCrNames:
+    - dr-primary
+    - dr-backup

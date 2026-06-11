@@ -1,0 +1,87 @@
+# Active/active traffic: a producer runs on EACH site (both sites accept writes).
+# Consumers start at replicas:0 so you can clearly SEE both queues converge to the
+# same set via the bidirectional mirror; scale a consumer up to drain / for the DR
+# recovery story.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: site1-producer, namespace: amq-aa, labels: { app: site1-producer, demo: amq-aa, site: site1 } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: site1-producer } }
+  template:
+    metadata: { labels: { app: site1-producer, demo: amq-aa, site: site1 } }
+    spec:
+      containers:
+        - name: producer
+          image: registry.redhat.io/amq7/amq-broker-rhel9@sha256:ec6a178d76a1521ea68ef312b43db6b952802d02431ad81f1b9bd107015c621d
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              echo "[SITE1-PRODUCER] publishing to demoQueue on site1 (mirrored to site2)";
+              while true; do
+                /opt/amq/bin/artemis producer --url tcp://site1-broker-all-0-svc:61616 \
+                  --user admin --password admin --destination queue://demoQueue \
+                  --message-count 5 --sleep 2500 --message-size 200;
+                echo "[SITE1-PRODUCER] batch at $(date '+%H:%M:%S')";
+              done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: site2-producer, namespace: amq-aa, labels: { app: site2-producer, demo: amq-aa, site: site2 } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: site2-producer } }
+  template:
+    metadata: { labels: { app: site2-producer, demo: amq-aa, site: site2 } }
+    spec:
+      containers:
+        - name: producer
+          image: registry.redhat.io/amq7/amq-broker-rhel9@sha256:ec6a178d76a1521ea68ef312b43db6b952802d02431ad81f1b9bd107015c621d
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              echo "[SITE2-PRODUCER] publishing to demoQueue on site2 (mirrored to site1)";
+              while true; do
+                /opt/amq/bin/artemis producer --url tcp://site2-broker-all-0-svc:61616 \
+                  --user admin --password admin --destination queue://demoQueue \
+                  --message-count 5 --sleep 2500 --message-size 200;
+                echo "[SITE2-PRODUCER] batch at $(date '+%H:%M:%S')";
+              done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: site1-consumer, namespace: amq-aa, labels: { app: site1-consumer, demo: amq-aa, site: site1 } }
+spec:
+  replicas: 0
+  selector: { matchLabels: { app: site1-consumer } }
+  template:
+    metadata: { labels: { app: site1-consumer, demo: amq-aa, site: site1 } }
+    spec:
+      containers:
+        - name: consumer
+          image: registry.redhat.io/amq7/amq-broker-rhel9@sha256:ec6a178d76a1521ea68ef312b43db6b952802d02431ad81f1b9bd107015c621d
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              /opt/amq/bin/artemis consumer --url tcp://site1-broker-all-0-svc:61616 \
+                --user admin --password admin --destination queue://demoQueue \
+                --message-count 100000 --receive-timeout 60000 --verbose
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: site2-consumer, namespace: amq-aa, labels: { app: site2-consumer, demo: amq-aa, site: site2 } }
+spec:
+  replicas: 0
+  selector: { matchLabels: { app: site2-consumer } }
+  template:
+    metadata: { labels: { app: site2-consumer, demo: amq-aa, site: site2 } }
+    spec:
+      containers:
+        - name: consumer
+          image: registry.redhat.io/amq7/amq-broker-rhel9@sha256:ec6a178d76a1521ea68ef312b43db6b952802d02431ad81f1b9bd107015c621d
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              /opt/amq/bin/artemis consumer --url tcp://site2-broker-all-0-svc:61616 \
+                --user admin --password admin --destination queue://demoQueue \
+                --message-count 100000 --receive-timeout 60000 --verbose

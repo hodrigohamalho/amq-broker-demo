@@ -168,6 +168,9 @@
             <feGaussianBlur stdDeviation="3.2" result="b"/>
             <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
           </filter>
+          <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="rgba(45,212,191,.8)"/>
+          </marker>
         </defs>
         <g id="paths"></g>
         <g id="dots"></g>
@@ -180,8 +183,9 @@
     <div class="panel">
       <h3>Scenario</h3>
       <div class="seg" id="modeSeg">
-        <button data-mode="queue" class="on">📥 Queue (anycast)</button>
-        <button data-mode="topic">📡 Topic (multicast)</button>
+        <button data-mode="queue" class="on">📥 Queue</button>
+        <button data-mode="topic">📡 Topic</button>
+        <button data-mode="dr">🌐 DR</button>
       </div>
       <div id="modeHint" style="font-size:12px;color:var(--muted);margin-top:9px;line-height:1.45"></div>
     </div>
@@ -191,7 +195,7 @@
       <div class="narr" id="narr">Starting…</div>
     </div>
 
-    <div class="panel">
+    <div class="panel" id="brokerControls">
       <h3>Demo controls</h3>
       <button class="btn danger" data-act="kill" data-id="0"><span class="em">💥</span> Simulate Broker-0 failure (pod kill)</button>
       <button class="btn warn" data-act="scaledown" data-id="1"><span class="em">📉</span> Scale-down 2→1 (message migration)</button>
@@ -201,14 +205,26 @@
       </div>
     </div>
 
+    <div class="panel" id="drControls" style="display:none">
+      <h3>DR controls (2 sites)</h3>
+      <button class="btn danger" data-dract="kill" data-id="1"><span class="em">💥</span> Simulate Site 1 failure</button>
+      <button class="btn danger" data-dract="kill" data-id="2"><span class="em">💥</span> Simulate Site 2 failure</button>
+      <button class="btn ghost" data-dract="restore" data-id="0"><span class="em">♻️</span> Restore both sites</button>
+      <div style="font-size:11px;color:var(--muted);margin-top:10px;line-height:1.45">
+        Async dual mirror keeps both sites converged. Kill one and the other still holds
+        the data — the DR proof. Uses <code>oc</code> on your machine.
+      </div>
+    </div>
+
     <div class="panel">
       <h3>Legend</h3>
       <div class="legend">
         <div class="row"><span class="swatch" style="background:var(--cyan)"></span> Message (queue / point-to-point)</div>
         <div class="row"><span class="swatch" style="background:var(--violet)"></span> Message (topic / copy per subscriber)</div>
         <div class="row"><span class="swatch" style="background:var(--amber)"></span> Migration between brokers</div>
-        <div class="row"><span class="swatch" style="background:var(--green)"></span> Broker ACTIVE</div>
-        <div class="row"><span class="swatch" style="background:var(--rh2)"></span> Broker OFFLINE</div>
+        <div class="row"><span class="swatch" style="background:#2dd4bf"></span> Replication (site ⇄ site mirror)</div>
+        <div class="row"><span class="swatch" style="background:var(--green)"></span> ACTIVE</div>
+        <div class="row"><span class="swatch" style="background:var(--rh2)"></span> OFFLINE</div>
       </div>
     </div>
   </div>
@@ -228,8 +244,11 @@ let dots = [];            // animated dots
 let layout = {};          // pixel coords
 let offlineSince = {};    // id -> bool
 let narration = "Starting…";
+let lastDr = null;        // last DR (two-site) state
+let prevDr = {};          // previous mirror counters per site
+let drOffline = {};       // site id -> bool
 
-const COLORS = {queue:"#38bdf8", topic:"#a78bfa", migrate:"#ffb020"};
+const COLORS = {queue:"#38bdf8", topic:"#a78bfa", migrate:"#ffb020", mirror:"#2dd4bf"};
 
 // ---------- layout ----------
 const ANCHORS = {
@@ -237,7 +256,8 @@ const ANCHORS = {
   b0:{x:.40,y:.27},
   b1:{x:.40,y:.73},
   consumer:{x:.92,y:.5},
-  s0:{x:.93,y:.26}, s1:{x:.93,y:.5}, s2:{x:.93,y:.74}
+  s0:{x:.93,y:.26}, s1:{x:.93,y:.5}, s2:{x:.93,y:.74},
+  site1:{x:.27,y:.5}, site2:{x:.73,y:.5}
 };
 
 function computeLayout(){
@@ -247,6 +267,12 @@ function computeLayout(){
   layout = {};
   for(const k in ANCHORS) layout[k] = {x:ANCHORS[k].x*W, y:ANCHORS[k].y*H};
   layout.W=W; layout.H=H;
+  // DR mirror line endpoints (between the two site cards)
+  const half=128, yo=54;
+  layout.mTopA={x:layout.site1.x+half, y:layout.site1.y-yo};
+  layout.mTopB={x:layout.site2.x-half, y:layout.site2.y-yo};
+  layout.mBotA={x:layout.site2.x-half, y:layout.site2.y+yo};
+  layout.mBotB={x:layout.site1.x+half, y:layout.site1.y+yo};
   placeNodes();
   drawPaths();
 }
@@ -269,10 +295,14 @@ function moveNode(id, pt){
 }
 
 function placeNodes(){
+  if(mode==="dr"){ placeDrNodes(); return; }
+  // hide DR site nodes when in broker view
+  ["site1","site2"].forEach(id=>{const e=nodeEl(id);if(e)e.style.display="none";});
   // producer
   ensureNode("producer",
     `<div class="endpoint"><div class="ic">📤</div>
      <div class="lbl">Producer</div><div class="sub">client app</div></div>`,"");
+  document.getElementById("node-producer").style.display="";
   moveNode("producer", layout.producer);
 
   // brokers
@@ -339,6 +369,7 @@ function lineEl(a,b,cls){
 }
 function drawPaths(){
   pathsG.innerHTML="";
+  if(mode==="dr"){ drawDrPaths(); return; }
   pathsG.appendChild(lineEl(layout.producer, layout.b0));
   pathsG.appendChild(lineEl(layout.producer, layout.b1));
   // cluster link
@@ -351,6 +382,103 @@ function drawPaths(){
       pathsG.appendChild(lineEl(layout.b0, layout[s]));
     });
   }
+}
+
+// ---------- DR (two sites, dual mirror) ----------
+function renderSiteCard(s){
+  let stCls="standby",stTxt="standby";
+  if(!s.online){stCls="offline";stTxt="offline";}
+  else if(s.active){stCls="active";stTxt="active";}
+  const cardCls="broker "+(!s.online?"offline":(s.active?"active":""));
+  const html=`
+    <div class="${cardCls}" style="width:250px">
+      <div class="pulse"></div>
+      <div class="top">
+        <div><div class="nm">🌐 ${s.name}</div><div class="pod">${s.cr||""}</div></div>
+        <span class="st ${stCls}">${stTxt}</span>
+      </div>
+      <div class="grid2">
+        <div class="met hl"><div class="v">${s.messageCount}</div><div class="k">in queue</div></div>
+        <div class="met"><div class="v">${s.routed}</div><div class="k">routed</div></div>
+        <div class="met"><div class="v">${s.mirrorOut}</div><div class="k">replicated out →</div></div>
+        <div class="met"><div class="v">${s.replIn||0}</div><div class="k">← replicated in</div></div>
+      </div>
+    </div>`;
+  ensureNode("site"+s.id, html, "");
+}
+
+function placeDrNodes(){
+  ["producer","b0","b1","consumer","s0","s1","s2"].forEach(id=>{const e=nodeEl(id);if(e)e.style.display="none";});
+  [1,2].forEach(id=>{
+    const s=(lastDr&&lastDr.sites.find(x=>x.id===id))
+      || {id,name:"Site "+id,cr:"site"+id+"-broker",online:false,active:false,messageCount:0,routed:0,mirrorOut:0,replIn:0};
+    renderSiteCard(s);
+    const e=nodeEl("site"+id); if(e){e.style.display=""; moveNode("site"+id, id===1?layout.site1:layout.site2);}
+  });
+}
+
+function drMirrorLine(a,b){
+  const p=document.createElementNS(NS,"path");
+  p.setAttribute("d",`M ${a.x} ${a.y} L ${b.x} ${b.y}`);
+  p.setAttribute("fill","none"); p.setAttribute("stroke","rgba(45,212,191,.5)");
+  p.setAttribute("stroke-width","2.4"); p.setAttribute("stroke-dasharray","7 7");
+  p.setAttribute("marker-end","url(#arrow)"); p.classList.add("flow");
+  return p;
+}
+function drText(x,y,t){
+  const e=document.createElementNS(NS,"text");
+  e.setAttribute("x",x); e.setAttribute("y",y); e.setAttribute("fill","rgba(45,212,191,.9)");
+  e.setAttribute("font-size","12.5"); e.setAttribute("font-weight","600");
+  e.setAttribute("text-anchor","middle"); e.textContent=t; return e;
+}
+function drawDrPaths(){
+  pathsG.innerHTML="";
+  pathsG.appendChild(drMirrorLine(layout.mTopA, layout.mTopB));   // site1 -> site2
+  pathsG.appendChild(drMirrorLine(layout.mBotA, layout.mBotB));   // site2 -> site1
+  const midx=(layout.site1.x+layout.site2.x)/2;
+  pathsG.appendChild(drText(midx, layout.mTopA.y-12, "mirror  ▶"));
+  pathsG.appendChild(drText(midx, layout.mBotA.y+22, "◀  mirror"));
+}
+
+function spawnMirror(dir,n){
+  const route = dir==="12" ? [layout.mTopA, layout.mTopB] : [layout.mBotA, layout.mBotB];
+  for(let i=0;i<n;i++) setTimeout(()=> spawnDot(route, COLORS.mirror, 210), i*120);
+}
+
+function onDrState(st){
+  const wasOff={...drOffline};
+  const byId={}; st.sites.forEach(s=>byId[s.id]=s);
+  // each site's "replicated in" = the other site's outbound mirror count
+  st.sites.forEach(s=>{ const o=byId[s.id===1?2:1]; s.replIn = o? o.mirrorOut:0; });
+  lastDr=st;
+  st.sites.forEach(s=>{
+    const down=!s.online;
+    if(down && !wasOff[s.id]){ drOffline[s.id]=true; const surv=s.id===1?2:1;
+      showBanner(`⚠ ${s.name} OFFLINE — Site ${surv} keeps serving (converged copy, no data lost)`);
+      toast(`${s.name} down — DR: Site ${surv} already holds the data`);
+    }else if(!down && wasOff[s.id]){ drOffline[s.id]=false; hideBanner();
+      toast(`${s.name} recovered — mirror re-syncing`);
+    }
+  });
+  [1,2].forEach(id=>{ const s=byId[id]; if(s){ renderSiteCard(s); moveNode("site"+id, id===1?layout.site1:layout.site2); } });
+  // animate replication based on real outbound-mirror deltas (only from online sites)
+  if(byId[1]&&byId[1].online){ const d=(byId[1].mirrorOut||0)-((prevDr[1]||{}).mirrorOut||0); spawnMirror("12", Math.max(0,Math.min(8,d))); }
+  if(byId[2]&&byId[2].online){ const d=(byId[2].mirrorOut||0)-((prevDr[2]||{}).mirrorOut||0); spawnMirror("21", Math.max(0,Math.min(8,d))); }
+  prevDr={}; st.sites.forEach(s=> prevDr[s.id]={mirrorOut:s.mirrorOut});
+  drNarration(); updateConn(true);
+}
+
+function drNarration(){
+  if(!lastDr){return;}
+  const sites=lastDr.sites, on=sites.filter(s=>s.online), off=sites.filter(s=>!s.online);
+  let txt="";
+  if(off.length){ const surv=on[0];
+    txt=`<b>${off.map(s=>s.name).join(", ")} OFFLINE.</b> Active/active DR: <b>${surv?surv.name:"—"}</b> keeps accepting traffic and already holds a <b>converged copy</b> via the mirror — <b>no data lost</b>. The mirror re-syncs when the site returns.`;
+  }else{
+    const conv = (sites.length===2)? `Both queues converged (~${sites[0].messageCount} ≈ ${sites[1].messageCount}).` : "";
+    txt=`<b>Active/active — bidirectional mirror.</b> Both sites accept producers; messages + acks replicate <b>both ways</b> (Site 1 ⇄ Site 2). ${conv} Async + broker dedup keep them in sync — at-least-once, not global exactly-once.`;
+  }
+  $("#narr").innerHTML=txt;
 }
 
 // ---------- dots / animation ----------
@@ -562,15 +690,20 @@ function updateConn(ok){
 // ---------- modes ----------
 const HINTS={
   queue:"Point-to-point: each message is delivered to <b>one</b> consumer. Multiple consumers compete (load balancing). Equivalent to a JMS Queue.",
-  topic:"Publish/Subscribe: <b>every subscriber gets a copy</b> of each message. Ideal for broadcasting events. Equivalent to a JMS Topic."
+  topic:"Publish/Subscribe: <b>every subscriber gets a copy</b> of each message. Ideal for broadcasting events. Equivalent to a JMS Topic.",
+  dr:"Active/active across two sites via <b>bidirectional AMQP mirror</b> (like Kafka MM2). Each site has its own PV; messages + acks replicate both ways and converge."
 };
 function setMode(m){
   mode=m;
   document.querySelectorAll("#modeSeg button").forEach(b=>b.classList.toggle("on",b.dataset.mode===m));
-  $("#modeHint").innerHTML=HINTS[m];
+  $("#modeHint").innerHTML=HINTS[m]||"";
+  $("#brokerControls").style.display = (m==="dr")?"none":"";
+  $("#drControls").style.display = (m==="dr")?"":"none";
+  hideBanner(); offlineSince={}; drOffline={};
   dots.forEach(d=>d.el.remove()); dots=[];
-  placeNodes(); drawPaths();
-  if(last) updateNarration();
+  computeLayout();
+  if(m==="dr"){ if(lastDr) drNarration(); }
+  else if(last){ updateNarration(); }
 }
 
 // ---------- actions ----------
@@ -588,13 +721,36 @@ async function doAction(act,id){
 // ---------- polling ----------
 async function poll(){
   try{
+    if(mode==="dr"){
+      const r=await fetch("/api/dr-state",{cache:"no-store"});
+      onDrState(await r.json());
+      return;
+    }
     const r=await fetch("/api/state",{cache:"no-store"});
-    const st=await r.json();
-    onState(st);
+    onState(await r.json());
   }catch(e){
     updateConn(false);
     $("#narr").innerHTML="No connection to the backend. Is the Python server running?";
   }
+}
+
+async function doDrAction(kind,id){
+  if(kind==="restore"){
+    toast("Restoring both sites…");
+    try{
+      await fetch("/api/dr-action/restore/1",{method:"POST"});
+      await fetch("/api/dr-action/restore/2",{method:"POST"});
+      toast("Both sites restoring — mirror re-syncs automatically.");
+    }catch(e){ toast("Error: "+e.message); }
+    return;
+  }
+  toast("Simulating Site "+id+" failure…");
+  try{
+    const j=await (await fetch(`/api/dr-action/${kind}/${id}`,{method:"POST"})).json();
+    if(j.ok) toast("Site "+id+" going down — watch the DR story unfold.");
+    else if(j.needsLogin) toast("oc login expired. Run: "+j.manual);
+    else toast("Failed: "+(j.output||j.error||"error"));
+  }catch(e){ toast("Error: "+e.message); }
 }
 
 // ---------- init ----------
@@ -613,6 +769,7 @@ window.addEventListener("resize", ()=>{ computeLayout(); if(last){st_re();} });
 function st_re(){ last.brokers.forEach(b=>renderBrokerCard(b.id)); moveNode("b0",layout.b0);moveNode("b1",layout.b1);}
 document.querySelectorAll("#modeSeg button").forEach(b=> b.onclick=()=>setMode(b.dataset.mode));
 document.querySelectorAll("[data-act]").forEach(b=> b.onclick=()=>doAction(b.dataset.act, b.dataset.id));
+document.querySelectorAll("[data-dract]").forEach(b=> b.onclick=()=>doDrAction(b.dataset.dract, b.dataset.id));
 init();
 </script>
 </body>

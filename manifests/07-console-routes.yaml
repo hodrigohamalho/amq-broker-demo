@@ -1,0 +1,24 @@
+# HTTPS (edge-TLS) routes to each broker's management console (Hawtio + Jolokia).
+# The Operator creates plain-HTTP routes; these add TLS so browsers (and the
+# visualizer) reach the console over https. OpenShift assigns the host automatically.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: amq-console-0
+  namespace: amq-demo
+  labels: { demo: amq }
+spec:
+  to: { kind: Service, name: demo-broker-wconsj-0-svc }
+  port: { targetPort: wconsj-0 }
+  tls: { termination: edge, insecureEdgeTerminationPolicy: Redirect }
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: amq-console-1
+  namespace: amq-demo
+  labels: { demo: amq }
+spec:
+  to: { kind: Service, name: demo-broker-wconsj-1-svc }
+  port: { targetPort: wconsj-1 }
+  tls: { termination: edge, insecureEdgeTerminationPolicy: Redirect }

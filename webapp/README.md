@@ -55,6 +55,8 @@ Stop with `Ctrl+C`.
 | `QUEUE` | `demoQueue` |
 | `TOPIC` | `demoTopic` |
 | `NAMESPACE` / `BROKER_CR` | `amq-demo` / `demo-broker` |
+| `SITE1_CONSOLE` / `SITE2_CONSOLE` | the `amq-aa` console routes (DR mode) |
+| `DR_NAMESPACE` | `amq-aa` (namespace of the two-site dual-mirror scenario) |
 | `DEMO_DATA` | unset — set to `1` to serve realistic synthetic data (no cluster needed) |
 
 Preview without a cluster:
