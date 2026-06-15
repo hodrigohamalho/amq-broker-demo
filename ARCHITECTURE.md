@@ -40,8 +40,7 @@ with partitions (a different model), not by replicating a queue to two active no
 | **Cluster + replicated backup per node** ⭐ | N (+N passive) | Replica per node | Each node has its own backup | Quorum per pair | **High** (2× brokers) | True "active/active + resilient" |
 | **Dual mirror (active/active, 2 sites)** | 1+ per site | Async copy on the other site | Manual / client repoint | N/A (async) | Medium | Cross-site active/active & DR |
 
-What an architect asking for "active/active" usually wants is row ⭐ (a cluster of
-live brokers, **each with its own replicated backup**) — i.e. active/active at the
+⭐ (a cluster of live brokers, **each with its own replicated backup**) — i.e. active/active at the
 *service* level, active/passive *per node*. That's the recommended on-prem topology.
 
 ---
