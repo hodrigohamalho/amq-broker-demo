@@ -9,13 +9,11 @@ AMQ Broker (ActiveMQ Artemis) on OpenShift. Written to settle the common
 
 ---
 
-## 1. The terminology trap: "active/active replication" is two different things
+## 1. The terminology trap: what "replication" actually means
 
-In Artemis there are **two independent axes**, and "active/active replication"
-asks for the intersection of the two — which does **not** exist for a single queue:
-
-Artemis actually has **three** distinct mechanisms — keep them separate, because
-"replication" gets used loosely and that's where the confusion starts:
+The phrase "active/active replication" conflates mechanisms that Artemis keeps
+**separate**. There are **three** of them — and "replication" gets used loosely for
+two, which is where the confusion starts:
 
 | Mechanism | What it is | Do brokers serve clients? | Same message copied? | Consistency |
 |---|---|---|---|---|
