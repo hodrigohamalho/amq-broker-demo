@@ -14,20 +14,33 @@ AMQ Broker (ActiveMQ Artemis) on OpenShift. Written to settle the common
 In Artemis there are **two independent axes**, and "active/active replication"
 asks for the intersection of the two — which does **not** exist for a single queue:
 
-| Concept | What it is | Do brokers serve clients? | Is a message replicated? |
-|---|---|---|---|
-| **Replication (HA)** | Primary/backup pair | **Only the primary** (backup is passive until failover) | Yes (1 sync copy) |
-| **Clustering** | N independent brokers linked by cluster connections | **All of them** (active/active) | **No** — each message lives on **one** broker |
+Artemis actually has **three** distinct mechanisms — keep them separate, because
+"replication" gets used loosely and that's where the confusion starts:
 
-**Why you can't have both for one queue:** an `anycast` queue delivers each message
-to **exactly one** consumer. If two active brokers held a replica of the same message
-and both had consumers, you'd get **double delivery** — or you'd need per-message
-distributed consensus, which destroys throughput. No serious broker offers
-"active/active with synchronous replication of the same queue." Kafka sidesteps this
-with partitions (a different model), not by replicating a queue to two active nodes.
+| Mechanism | What it is | Do brokers serve clients? | Same message copied? | Consistency |
+|---|---|---|---|---|
+| **HA Replication** | Primary/backup pair | **Only the primary** (backup passive) | Yes, **synchronous** | Strong, exactly-once |
+| **Clustering** | N independent brokers linked by cluster connections | **All** (active/active) | **No** — each message lives on **one** broker | Strong (single owner) |
+| **Mirroring** (broker connections) | Async copy to another broker/site | **All sites** (active/active possible) | Yes, **asynchronous** | **Eventual, at-least-once** |
 
-> **One-liner for the architect:** *Replication in Artemis is always active/passive.
-> Active/active is clustering, and clustering does not replicate individual messages.*
+**Why you can't have it _synchronously_ for one queue:** an `anycast` queue delivers
+each message to **exactly one** consumer. To keep that guarantee while **two active**
+brokers hold the same queue, every delivery and ack would need **per-message
+distributed consensus** (a quorum round-trip per message) — which destroys throughput.
+So no broker offers **synchronous, exactly-once active/active** replication of the
+same queue. Kafka sidesteps it with **partitions** (a single leader per partition),
+not by sync-replicating a queue to two active nodes.
+
+You **can** do **asynchronous** active/active replication of the same queue — that is
+exactly what **Mirroring** does (see §4) — but only by **giving up the strong
+guarantee** (eventual consistency, at-least-once, possible duplicates). That async
+trade-off is *why* it needs no per-message consensus.
+
+> **One-liner for the architect:** *Artemis **HA replication** is synchronous and
+> always active/passive. Active/active comes from **clustering** (each message owned by
+> one broker) or from **mirroring** (an async, eventually-consistent copy — §4). What
+> does **not** exist is **synchronous, exactly-once** replication of one queue across
+> multiple active brokers.*
 
 ---
 
@@ -71,6 +84,11 @@ as a first-class field; the native path is **PVC + cluster**.
 When the goal is **two sites both active** (the "Kafka MirrorMaker 2 active/active"
 ask), AMQ Broker supports it via **dual mirror**: a mirror broker-connection on
 **each** broker, replicating sends **and** acknowledgements both ways.
+
+> This **is** the "async active/active replication of the same queue" that §1 said is
+> possible. It works precisely because it is **asynchronous and at-least-once** — so it
+> needs no per-message consensus. The Artemis features below (loop prevention, dedup)
+> make the two copies *converge*; they do **not** turn it into synchronous exactly-once.
 
 ```
 SITE 1  ──  dual AMQP mirror  ──  SITE 2
