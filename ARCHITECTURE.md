@@ -56,8 +56,7 @@ This is the strongest counter to "force replication" on OpenShift:
 - **`messageMigration`** drains a broker that scales down to the survivors.
 
 So Artemis **replication is often redundant on OpenShift** with what Kubernetes
-already does — and it costs **2× brokers** plus a **quorum dependency** (ZooKeeper /
-pluggable lock manager) to avoid split-brain. The Operator doesn't expose replication
+already does. The Operator doesn't expose replication
 as a first-class field; the native path is **PVC + cluster**.
 
 > *Which requirement does replication meet that PVC + reschedule
