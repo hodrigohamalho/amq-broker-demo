@@ -1,8 +1,8 @@
 # AMQ Broker — HA & DR Architecture Guide
 
 A decision guide for **high availability** and **disaster recovery** with Red Hat
-AMQ Broker (ActiveMQ Artemis) on OpenShift. Written to settle the common
-"let's do active/active replication" debate with precise terminology and trade-offs.
+AMQ Broker (ActiveMQ Artemis) on OpenShift. A precise look at the terminology and
+trade-offs behind "active/active replication", to support an informed design decision.
 
 > Scope note: this guide assumes **own-PV persistence** (each broker writes its own
 > journal to a PVC). Shared-store HA is intentionally out of scope here.
@@ -34,7 +34,7 @@ exactly what **Mirroring** does (see §4) — but only by **giving up the strong
 guarantee** (eventual consistency, at-least-once, possible duplicates). That async
 trade-off is *why* it needs no per-message consensus.
 
-> **One-liner for the architect:** *Artemis **HA replication** is synchronous and
+> **In one line:** *Artemis **HA replication** is synchronous and
 > always active/passive. Active/active comes from **clustering** (each message owned by
 > one broker) or from **mirroring** (an async, eventually-consistent copy — §4). What
 > does **not** exist is **synchronous, exactly-once** replication of one queue across
@@ -58,7 +58,7 @@ trade-off is *why* it needs no per-message consensus.
 
 ## 3. On OpenShift, the platform already gives you node-failure recovery
 
-This is the strongest counter to "force replication" on OpenShift:
+A consideration specific to OpenShift worth weighing:
 
 - A broker is a **StatefulSet with a PVC**. If the pod/node dies, OpenShift
   **reschedules the pod with the same name and re-attaches the same PV** — persisted
@@ -99,7 +99,7 @@ SITE 1  ──  dual AMQP mirror  ──  SITE 2
 - It uses **only own-PV persistence** — the mirror is async event replication over
   the network, not shared storage.
 
-### The property the architect must accept (same as MM2)
+### Key property: asynchronous and eventually consistent (same as MM2)
 
 The mirror is **asynchronous → eventually consistent**. With consumers active on
 **both** sites on the same queue, there is a **double-delivery window** (a message
