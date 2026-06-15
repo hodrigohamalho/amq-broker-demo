@@ -60,7 +60,7 @@ already does — and it costs **2× brokers** plus a **quorum dependency** (ZooK
 pluggable lock manager) to avoid split-brain. The Operator doesn't expose replication
 as a first-class field; the native path is **PVC + cluster**.
 
-> **Ask the architect:** *Which requirement does replication meet that PVC + reschedule
+> *Which requirement does replication meet that PVC + reschedule
 > does not?* The only legitimate answer is usually **sub-second RTO** (failover without
 > waiting ~10–30s for the pod to reschedule). If that SLA isn't real, replication is
 > complexity without payoff.
