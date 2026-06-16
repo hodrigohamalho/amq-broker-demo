@@ -170,7 +170,81 @@ Give the client the connector list and topology:
 
 ---
 
-## 6. How this maps to the demo scenarios in this repo
+## 6. Exposure & load balancing across two OpenShift clusters
+
+In a real DR/active-active deployment the two sites are **separate OpenShift clusters,
+each with its own Ingress and DNS** — there is no shared load balancer by default. So
+there are **two layers** to design: how AMQP is exposed *inside* each cluster, and how
+clients are steered *between* the two sites.
+
+### 6.1 Exposing AMQP inside each cluster
+
+AMQP is **TCP, not HTTP** — the default OpenShift Router is L7. Two options:
+
+| Option | How | Use when |
+|---|---|---|
+| **Passthrough Route + SNI** (port 443) | The Router routes TLS by **SNI**. Acceptor must have **`sslEnabled: true`** (amqps). Client: `amqps://broker.apps.<cluster>/:443` | You want to **reuse the existing Ingress/DNS** (`*.apps.<cluster>`). Most common. |
+| **Service `type: LoadBalancer`** (L4 / NLB) | A dedicated cloud NLB per broker/acceptor, raw TCP | You need **plain AMQP** (no TLS) or a dedicated port |
+
+> ⚠️ To go through the Router (reusing the cluster DNS), **AMQP must be TLS** — SNI
+> lives in the TLS handshake. Plain `61616` can't be host-routed by the Router; for
+> that, use a LoadBalancer Service. With a cluster of N brokers per site, the Operator
+> creates **one route per broker pod**.
+
+### 6.2 Steering clients between the two sites
+
+Two independent clusters/DNS ⇒ the cross-site layer sits **above** both:
+
+- **Client-side failover (multi-host)** — *preferred for AMQP.* The client library
+  (Qpid JMS, Proton) is given **both** sites:
+  `failover:(amqps://broker.site1…:443,amqps://broker.site2…:443)`. It connects to one
+  and reconnects to the other on failure (which already holds the mirrored data). No
+  extra infrastructure; failover in seconds. Needs each app configured with both URLs.
+- **GSLB / global DNS** — *single endpoint.* A global DNS balancer (Route 53 w/ health
+  checks, F5 GTM, Infoblox, Akamai…) fronts both sites; apps use **one** hostname that
+  resolves to the healthy site. Best when apps are off-the-shelf and only accept a
+  **single** broker URL. Caveat: DNS **TTL/caching** means failover isn't instant — an
+  AMQP client only re-resolves on reconnect, so keep TTL low (30–60s).
+
+### 6.3 Recommended pattern ("mostly AMQP", two active sites)
+
+```
+                 ┌─────────────── GSLB (geo / health) ───────────────┐
+                 │  broker.example.com → nearest healthy site         │
+                 └───────────────┬───────────────────┬───────────────┘
+            apps (region A) ─────┘                   └───── apps (region B)
+                 │                                             │
+        amqps :443 (SNI route)                        amqps :443 (SNI route)
+                 ▼                                             ▼
+      ┌────────────────────┐   dual AMQP mirror (amqps,  ┌────────────────────┐
+      │  OpenShift Site 1  │ ◀═══ cross-cluster, TLS ═══▶ │  OpenShift Site 2  │
+      │  broker(s) + PV    │                              │  broker(s) + PV    │
+      └────────────────────┘                              └────────────────────┘
+```
+
+- **GSLB steers by locality** (each site serves its own region — both active) and
+  fails everyone over to the survivor on a site outage.
+- **Client failover list** as a backstop for apps that support it (reconnects without
+  waiting for DNS TTL).
+- The **mirror** keeps the data converged; GSLB/client does the **switch**.
+
+### 6.4 The mirror connection is itself cross-cluster
+
+In the single-cluster demo the mirror uses internal Service DNS. Across **two real
+clusters** the mirror (Site 1 → Site 2) is **just another AMQP client** and must reach
+the **external** endpoint of the remote site:
+```
+AMQPConnections.toSite2.uri=tcp://broker.apps.site2…:443   # TLS/SNI + mutual trust
+```
+So each site's AMQP acceptor must be **routable from the other site** (route or LB),
+with TLS and a configured **truststore** between clusters — normally over private
+network/peering, not the public internet.
+
+> Reminder: GSLB/LB solve **reach and failover, not exactly-once**. If the same logical
+> queue is consumed on both sites, the async mirror's duplicate window still applies —
+> use idempotent consumers / dedup (see §4).
+
+## 7. How this maps to the demo scenarios in this repo
 
 | This guide | Repo scenario |
 |---|---|
