@@ -305,9 +305,9 @@ function placeNodes(){
   document.getElementById("node-producer").style.display="";
   moveNode("producer", layout.producer);
 
-  // brokers
-  renderBrokerCard(0); moveNode("b0", layout.b0);
-  renderBrokerCard(1); moveNode("b1", layout.b1);
+  // brokers (restore display in case we came back from DR mode, which hid them)
+  renderBrokerCard(0); nodeEl("b0").style.display=""; moveNode("b0", layout.b0);
+  renderBrokerCard(1); nodeEl("b1").style.display=""; moveNode("b1", layout.b1);
 
   // consumers
   if(mode==="queue"){
@@ -442,7 +442,7 @@ function drawDrPaths(){
 
 function spawnMirror(dir,n){
   const route = dir==="12" ? [layout.mTopA, layout.mTopB] : [layout.mBotA, layout.mBotB];
-  for(let i=0;i<n;i++) setTimeout(()=> spawnDot(route, COLORS.mirror, 210), i*120);
+  for(let i=0;i<n;i++) setTimeout(()=>{ if(mode==="dr") spawnDot(route, COLORS.mirror, 210); }, i*120);
 }
 
 function onDrState(st){
@@ -631,7 +631,7 @@ function spawnFromDeltas(){
   const dRouted = (ib.queue?ib.queue.routed:0) - ((prev[ingress.id]||{}).routed||0);
   const n = Math.max(0, Math.min(8, Math.max(dRouted, dAck)));
   const route = routeFor(ingress.id, egress.id);
-  for(let i=0;i<n;i++) setTimeout(()=> spawnDot(route, COLORS.queue, 250), i*130);
+  for(let i=0;i<n;i++) setTimeout(()=>{ if(mode==="queue") spawnDot(route, COLORS.queue, 250); }, i*130);
   // if nothing flowed but a producer is active, a light pulse could be sent for "life"
   if(n===0 && last.brokers.some(b=>b.online&&b.active)) {
     // nothing
@@ -647,7 +647,7 @@ function spawnTopic(){
   }
   const dRouted = (tb.topic.routedMessageCount||0) - ((prev[tb.id]||{}).topicRouted||0);
   const n = Math.max(0, Math.min(6, dRouted));
-  for(let i=0;i<n;i++) setTimeout(()=> fanOutDot(COLORS.topic), i*160);
+  for(let i=0;i<n;i++) setTimeout(()=>{ if(mode==="topic") fanOutDot(COLORS.topic); }, i*160);
 }
 
 // ---------- narration ----------
@@ -700,7 +700,7 @@ function setMode(m){
   $("#brokerControls").style.display = (m==="dr")?"none":"";
   $("#drControls").style.display = (m==="dr")?"":"none";
   hideBanner(); offlineSince={}; drOffline={};
-  dots.forEach(d=>d.el.remove()); dots=[];
+  dots.forEach(d=>d.el.remove()); dots=[]; dotsG.innerHTML="";
   computeLayout();
   if(m==="dr"){ if(lastDr) drNarration(); }
   else if(last){ updateNarration(); }
