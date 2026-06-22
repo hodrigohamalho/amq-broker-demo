@@ -243,7 +243,7 @@ def read_site(site):
     outbound mirror queue MessagesAdded (= events replicated to the other site)."""
     out = {"id": site["id"], "name": site["name"], "cr": site["cr"],
            "mirror": site["mirror"], "online": False, "active": False,
-           "messageCount": 0, "routed": 0, "mirrorOut": 0}
+           "messageCount": 0, "routed": 0, "mirrorOut": 0, "consumers": 0}
     batch = [
         {"type": "read", "mbean": 'org.apache.activemq.artemis:broker="amq-broker"',
          "attribute": "Active"},
@@ -251,6 +251,8 @@ def read_site(site):
          "attribute": ["MessageCount", "RoutedMessageCount"]},
         {"type": "read", "mbean": _mirror_mbean(site["mirror"]),
          "attribute": ["MessagesAdded"]},
+        {"type": "read", "mbean": _q_mbean(CFG["queue"]),
+         "attribute": ["ConsumerCount"]},
     ]
     res = _jolokia_post(site["console"], batch)
     if not res or not isinstance(res, list):
@@ -273,6 +275,11 @@ def read_site(site):
             out["mirrorOut"] = res[2]["value"].get("MessagesAdded", 0)
     except Exception:
         pass
+    try:
+        if len(res) > 3 and res[3].get("status") == 200:
+            out["consumers"] = res[3]["value"].get("ConsumerCount", 0)
+    except Exception:
+        pass
     return out
 
 
@@ -287,10 +294,12 @@ def dr_demo_state():
     return {"sites": [
         {"id": 1, "name": "Site 1", "cr": "site1-broker", "mirror": "toSite2",
          "online": True, "active": True, "messageCount": _dr_demo["s1q"],
-         "routed": _dr_demo["s1q"] + _dr_demo["m21"], "mirrorOut": _dr_demo["m12"]},
+         "routed": _dr_demo["s1q"] + _dr_demo["m21"], "mirrorOut": _dr_demo["m12"],
+         "consumers": 1},
         {"id": 2, "name": "Site 2", "cr": "site2-broker", "mirror": "toSite1",
          "online": True, "active": True, "messageCount": _dr_demo["s2q"],
-         "routed": _dr_demo["s2q"] + _dr_demo["m12"], "mirrorOut": _dr_demo["m21"]},
+         "routed": _dr_demo["s2q"] + _dr_demo["m12"], "mirrorOut": _dr_demo["m21"],
+         "consumers": 1},
     ]}
 
 
@@ -313,6 +322,18 @@ def dr_action(kind, site_id):
                       "-p", '{"spec":{"deploymentPlan":{"size":%s}}}' % size])
     manual = ("oc patch activemqartemis %s -n %s --type merge "
               "-p '{\"spec\":{\"deploymentPlan\":{\"size\":%s}}}'" % (cr, ns, size))
+    # On restore, bounce that site's consumer so a failed-over client returns home —
+    # but only AFTER the broker is ready again (delayed, detached), to avoid it just
+    # failing back over to the survivor.
+    if kind == "restore":
+        try:
+            subprocess.Popen(
+                ["bash", "-c",
+                 f"sleep 50; oc rollout restart deployment/site{site_id}-consumer -n {ns}"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True)
+        except Exception:
+            pass
     return {"ok": ok, "output": out, "manual": manual,
             "needsLogin": (not ok and ("Unauthorized" in out or "login" in out.lower()))}
 

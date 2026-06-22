@@ -400,8 +400,8 @@ function renderSiteCard(s){
         <span class="st ${stCls}">${stTxt}</span>
       </div>
       <div class="grid2">
-        <div class="met hl"><div class="v">${s.messageCount}</div><div class="k">in queue</div></div>
-        <div class="met"><div class="v">${s.routed}</div><div class="k">routed</div></div>
+        <div class="met hl"><div class="v">${s.consumers||0}</div><div class="k">consumers</div></div>
+        <div class="met"><div class="v">${s.messageCount}</div><div class="k">in queue</div></div>
         <div class="met"><div class="v">${s.mirrorOut}</div><div class="k">replicated out →</div></div>
         <div class="met"><div class="v">${s.replIn||0}</div><div class="k">← replicated in</div></div>
       </div>
@@ -445,12 +445,26 @@ function drawDrPaths(){
   // local-produce links (each producer feeds its own site)
   pathsG.appendChild(lineEl(layout.prod1, layout.site1));
   pathsG.appendChild(lineEl(layout.prod2, layout.site2));
-  // mirror lanes, each labelled by its SOURCE so it's clear they carry different messages
-  pathsG.appendChild(drMirrorLine(layout.mTopA, layout.mTopB));   // site1 -> site2
-  pathsG.appendChild(drMirrorLine(layout.mBotA, layout.mBotB));   // site2 -> site1
-  const midx=(layout.site1.x+layout.site2.x)/2;
-  pathsG.appendChild(drText(midx, layout.mTopA.y-12, "Site 1's writes  ▶"));
-  pathsG.appendChild(drText(midx, layout.mBotA.y+22, "◀  Site 2's writes"));
+  const off = lastDr ? lastDr.sites.filter(s=>!s.online).map(s=>s.id) : [];
+  if(off.length){
+    // failure scenario: the dead site's app reroutes to the survivor (amber)
+    const dead=off[0], surv=dead===1?2:1;
+    const prod=dead===1?layout.prod1:layout.prod2, site=surv===1?layout.site1:layout.site2;
+    const fl=document.createElementNS(NS,"path");
+    fl.setAttribute("d",`M ${prod.x} ${prod.y} L ${site.x} ${site.y}`);
+    fl.setAttribute("fill","none"); fl.setAttribute("stroke","rgba(255,176,32,.7)");
+    fl.setAttribute("stroke-width","2.6"); fl.setAttribute("stroke-dasharray","7 7"); fl.classList.add("flow");
+    pathsG.appendChild(fl);
+    const e=drText((prod.x+site.x)/2, prod.y-14, `Site ${dead} app → Site ${surv} (failover)`);
+    e.setAttribute("fill","rgba(255,176,32,.95)"); pathsG.appendChild(e);
+  }else{
+    // mirror lanes, each labelled by its SOURCE so it's clear they carry different messages
+    pathsG.appendChild(drMirrorLine(layout.mTopA, layout.mTopB));   // site1 -> site2
+    pathsG.appendChild(drMirrorLine(layout.mBotA, layout.mBotB));   // site2 -> site1
+    const midx=(layout.site1.x+layout.site2.x)/2;
+    pathsG.appendChild(drText(midx, layout.mTopA.y-12, "Site 1's writes  ▶"));
+    pathsG.appendChild(drText(midx, layout.mBotA.y+22, "◀  Site 2's writes"));
+  }
 }
 
 // A message is BORN at a site's producer (blue), enters the site, then is REPLICATED
@@ -467,26 +481,37 @@ function spawnSiteFlow(siteId, n, targetOnline){
   }, i*130);
 }
 
+// when a site is down, its app reroutes to the survivor (amber = failover)
+function spawnFailover(deadId, survId, n){
+  const prod = deadId===1?layout.prod1:layout.prod2;
+  const site = survId===1?layout.site1:layout.site2;
+  for(let i=0;i<n;i++) setTimeout(()=>{ if(mode==="dr") spawnDot([prod,site], COLORS.migrate, 240); }, i*130);
+}
+
 function onDrState(st){
   const wasOff={...drOffline};
   const byId={}; st.sites.forEach(s=>byId[s.id]=s);
   // each site's "replicated in" = the other site's outbound mirror count
   st.sites.forEach(s=>{ const o=byId[s.id===1?2:1]; s.replIn = o? o.mirrorOut:0; });
   lastDr=st;
+  let changed=false;
   st.sites.forEach(s=>{
     const down=!s.online;
-    if(down && !wasOff[s.id]){ drOffline[s.id]=true; const surv=s.id===1?2:1;
-      showBanner(`⚠ ${s.name} OFFLINE — Site ${surv} keeps serving (converged copy, no data lost)`);
-      toast(`${s.name} down — DR: Site ${surv} already holds the data`);
-    }else if(!down && wasOff[s.id]){ drOffline[s.id]=false; hideBanner();
+    if(down && !wasOff[s.id]){ drOffline[s.id]=true; changed=true; const surv=s.id===1?2:1;
+      showBanner(`⚠ ${s.name} OFFLINE — its apps failed over to Site ${surv}, nothing stopped`);
+      toast(`${s.name} down — apps failed over to Site ${surv}`);
+    }else if(!down && wasOff[s.id]){ drOffline[s.id]=false; changed=true; hideBanner();
       toast(`${s.name} recovered — mirror re-syncing`);
     }
   });
   [1,2].forEach(id=>{ const s=byId[id]; if(s){ renderSiteCard(s); moveNode("site"+id, id===1?layout.site1:layout.site2); } });
-  // animate each site's own flow (produce -> replicate) from real outbound-mirror deltas
+  if(changed) drawDrPaths();   // switch between mirror lanes and the failover line
+  // animate the flow from real outbound-mirror deltas
   const s1on=!!(byId[1]&&byId[1].online), s2on=!!(byId[2]&&byId[2].online);
-  if(s1on){ const d=(byId[1].mirrorOut||0)-((prevDr[1]||{}).mirrorOut||0); spawnSiteFlow(1, Math.max(0,Math.min(8,d)), s2on); }
-  if(s2on){ const d=(byId[2].mirrorOut||0)-((prevDr[2]||{}).mirrorOut||0); spawnSiteFlow(2, Math.max(0,Math.min(8,d)), s1on); }
+  const delta=id=> Math.max(0,Math.min(8,(byId[id].mirrorOut||0)-((prevDr[id]||{}).mirrorOut||0)));
+  if(s1on && s2on){ spawnSiteFlow(1, delta(1), true); spawnSiteFlow(2, delta(2), true); }
+  else if(s1on && !s2on){ const n=delta(1); spawnSiteFlow(1, n, false); spawnFailover(2, 1, n); }  // site2 down: its app -> site1
+  else if(!s1on && s2on){ const n=delta(2); spawnSiteFlow(2, n, false); spawnFailover(1, 2, n); }  // site1 down: its app -> site2
   prevDr={}; st.sites.forEach(s=> prevDr[s.id]={mirrorOut:s.mirrorOut});
   drNarration(); updateConn(true);
 }
@@ -495,8 +520,8 @@ function drNarration(){
   if(!lastDr){return;}
   const sites=lastDr.sites, on=sites.filter(s=>s.online), off=sites.filter(s=>!s.online);
   let txt="";
-  if(off.length){ const surv=on[0];
-    txt=`<b>${off.map(s=>s.name).join(", ")} OFFLINE.</b> Active/active DR: <b>${surv?surv.name:"—"}</b> keeps accepting traffic and already holds a <b>converged copy</b> via the mirror — <b>no data lost</b>. The mirror re-syncs when the site returns.`;
+  if(off.length){ const surv=on[0], dead=off[0];
+    txt=`<b>${dead.name} OFFLINE.</b> Its producer and consumer <b>failed over to ${surv?surv.name:"—"}</b> — <b>nothing stopped</b>. ${surv?surv.name:"The survivor"} now serves both sites and already holds the <b>converged copy</b> (no data lost). The mirror re-syncs when ${dead.name} returns.`;
   }else{
     const conv = (sites.length===2)? `Both queues converge (~${sites[0].messageCount} ≈ ${sites[1].messageCount}).` : "";
     txt=`<b>Active/active — bidirectional mirror.</b> Each site takes its own local writes; the mirror carries <b>each site's own messages</b> to the other. <b>Site 1 → Site 2</b> and <b>Site 2 → Site 1</b> are <b>different messages, not a loop</b>. ${conv} Async + broker dedup — at-least-once, not global exactly-once.`;

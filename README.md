@@ -186,7 +186,7 @@ MirrorMaker 2 active/active setup.
 ```bash
 oc apply -f manifests/active-active/01-operator.yaml      # Operator in the amq-aa namespace
 oc apply -f manifests/active-active/02-brokers.yaml        # site1-broker <== dual mirror ==> site2-broker
-oc apply -f manifests/active-active/03-apps.yaml           # a producer on EACH site
+oc apply -f manifests/active-active/03-apps.yaml           # a producer + consumer on EACH site (with client failover)
 oc apply -f manifests/active-active/04-console-routes.yaml
 ```
 
@@ -198,9 +198,15 @@ AMQPConnections.toSite2.connectionElements.mirror.messageAcknowledgements=true
 ```
 (site 2 has the symmetric `toSite1` connection.)
 
-**Demo it** in the visualizer's **DR mode** (see below): both queues stay converged;
-click *Simulate Site 1 failure* and Site 2 keeps serving with a converged copy — no
-data lost. Then *Restore both sites* and the mirror re-syncs.
+Each app **prefers its local site but fails over to the other** (the failover is
+explicit in the client loop: `artemis <local> || artemis <remote>`), so a site outage
+stops nothing.
+
+**Demo it** in the visualizer's **DR mode** (see below): both queues stay converged
+and each site shows its own consumer. Click *Simulate Site 1 failure* — Site 1 goes
+OFFLINE and its **producer and consumer fail over to Site 2** (shown as an amber
+"failover" flow); **nothing stops** and no data is lost. Then *Restore both sites* and
+the mirror re-syncs (the failed-over consumer returns home).
 
 > ⚠️ The mirror is **asynchronous** → with consumers on both sites you get
 > at-least-once with a possible duplicate window (same trade-off as Kafka MM2), **not**
