@@ -257,7 +257,8 @@ const ANCHORS = {
   b1:{x:.40,y:.73},
   consumer:{x:.92,y:.5},
   s0:{x:.93,y:.26}, s1:{x:.93,y:.5}, s2:{x:.93,y:.74},
-  site1:{x:.27,y:.5}, site2:{x:.73,y:.5}
+  site1:{x:.33,y:.5}, site2:{x:.67,y:.5},
+  prod1:{x:.06,y:.5}, prod2:{x:.94,y:.5}
 };
 
 function computeLayout(){
@@ -267,12 +268,13 @@ function computeLayout(){
   layout = {};
   for(const k in ANCHORS) layout[k] = {x:ANCHORS[k].x*W, y:ANCHORS[k].y*H};
   layout.W=W; layout.H=H;
-  // DR mirror line endpoints (between the two site cards)
-  const half=128, yo=54;
-  layout.mTopA={x:layout.site1.x+half, y:layout.site1.y-yo};
-  layout.mTopB={x:layout.site2.x-half, y:layout.site2.y-yo};
-  layout.mBotA={x:layout.site2.x-half, y:layout.site2.y+yo};
-  layout.mBotB={x:layout.site1.x+half, y:layout.site1.y+yo};
+  // DR mirror lane endpoints — inset is gap-relative (clamped) so the lane never
+  // collapses or crosses on narrow stages.
+  const yo=54, gap=layout.site2.x-layout.site1.x, inset=Math.min(128, gap*0.42);
+  layout.mTopA={x:layout.site1.x+inset, y:layout.site1.y-yo};
+  layout.mTopB={x:layout.site2.x-inset, y:layout.site2.y-yo};
+  layout.mBotA={x:layout.site2.x-inset, y:layout.site2.y+yo};
+  layout.mBotB={x:layout.site1.x+inset, y:layout.site1.y+yo};
   placeNodes();
   drawPaths();
 }
@@ -296,8 +298,8 @@ function moveNode(id, pt){
 
 function placeNodes(){
   if(mode==="dr"){ placeDrNodes(); return; }
-  // hide DR site nodes when in broker view
-  ["site1","site2"].forEach(id=>{const e=nodeEl(id);if(e)e.style.display="none";});
+  // hide DR site/producer nodes when in broker view
+  ["site1","site2","prod1","prod2"].forEach(id=>{const e=nodeEl(id);if(e)e.style.display="none";});
   // producer
   ensureNode("producer",
     `<div class="endpoint"><div class="ic">📤</div>
@@ -409,6 +411,13 @@ function renderSiteCard(s){
 
 function placeDrNodes(){
   ["producer","b0","b1","consumer","s0","s1","s2"].forEach(id=>{const e=nodeEl(id);if(e)e.style.display="none";});
+  // one local producer per site (shows where messages are BORN, so the mirror reads
+  // as "each site replicates its own writes" rather than a loop)
+  [["prod1","Site 1 app"],["prod2","Site 2 app"]].forEach(([id,sub])=>{
+    ensureNode(id, `<div class="endpoint"><div class="ic">📤</div>
+      <div class="lbl">Producer</div><div class="sub">${sub}</div></div>`,"");
+    nodeEl(id).style.display=""; moveNode(id, id==="prod1"?layout.prod1:layout.prod2);
+  });
   [1,2].forEach(id=>{
     const s=(lastDr&&lastDr.sites.find(x=>x.id===id))
       || {id,name:"Site "+id,cr:"site"+id+"-broker",online:false,active:false,messageCount:0,routed:0,mirrorOut:0,replIn:0};
@@ -433,16 +442,29 @@ function drText(x,y,t){
 }
 function drawDrPaths(){
   pathsG.innerHTML="";
+  // local-produce links (each producer feeds its own site)
+  pathsG.appendChild(lineEl(layout.prod1, layout.site1));
+  pathsG.appendChild(lineEl(layout.prod2, layout.site2));
+  // mirror lanes, each labelled by its SOURCE so it's clear they carry different messages
   pathsG.appendChild(drMirrorLine(layout.mTopA, layout.mTopB));   // site1 -> site2
   pathsG.appendChild(drMirrorLine(layout.mBotA, layout.mBotB));   // site2 -> site1
   const midx=(layout.site1.x+layout.site2.x)/2;
-  pathsG.appendChild(drText(midx, layout.mTopA.y-12, "mirror  ▶"));
-  pathsG.appendChild(drText(midx, layout.mBotA.y+22, "◀  mirror"));
+  pathsG.appendChild(drText(midx, layout.mTopA.y-12, "Site 1's writes  ▶"));
+  pathsG.appendChild(drText(midx, layout.mBotA.y+22, "◀  Site 2's writes"));
 }
 
-function spawnMirror(dir,n){
-  const route = dir==="12" ? [layout.mTopA, layout.mTopB] : [layout.mBotA, layout.mBotB];
-  for(let i=0;i<n;i++) setTimeout(()=>{ if(mode==="dr") spawnDot(route, COLORS.mirror, 210); }, i*120);
+// A message is BORN at a site's producer (blue), enters the site, then is REPLICATED
+// (teal) to the other site. Two one-way pipelines — not a loop. Mirror is only drawn
+// if the target site is online.
+function spawnSiteFlow(siteId, n, targetOnline){
+  const produceRoute = siteId===1 ? [layout.prod1, layout.site1] : [layout.prod2, layout.site2];
+  const mirrorRoute  = siteId===1 ? [layout.mTopA, layout.mTopB] : [layout.mBotA, layout.mBotB];
+  for(let i=0;i<n;i++) setTimeout(()=>{
+    if(mode!=="dr") return;
+    spawnDot(produceRoute, COLORS.queue, 240, ()=>{
+      if(mode==="dr" && targetOnline) spawnDot(mirrorRoute, COLORS.mirror, 210);
+    });
+  }, i*130);
 }
 
 function onDrState(st){
@@ -461,9 +483,10 @@ function onDrState(st){
     }
   });
   [1,2].forEach(id=>{ const s=byId[id]; if(s){ renderSiteCard(s); moveNode("site"+id, id===1?layout.site1:layout.site2); } });
-  // animate replication based on real outbound-mirror deltas (only from online sites)
-  if(byId[1]&&byId[1].online){ const d=(byId[1].mirrorOut||0)-((prevDr[1]||{}).mirrorOut||0); spawnMirror("12", Math.max(0,Math.min(8,d))); }
-  if(byId[2]&&byId[2].online){ const d=(byId[2].mirrorOut||0)-((prevDr[2]||{}).mirrorOut||0); spawnMirror("21", Math.max(0,Math.min(8,d))); }
+  // animate each site's own flow (produce -> replicate) from real outbound-mirror deltas
+  const s1on=!!(byId[1]&&byId[1].online), s2on=!!(byId[2]&&byId[2].online);
+  if(s1on){ const d=(byId[1].mirrorOut||0)-((prevDr[1]||{}).mirrorOut||0); spawnSiteFlow(1, Math.max(0,Math.min(8,d)), s2on); }
+  if(s2on){ const d=(byId[2].mirrorOut||0)-((prevDr[2]||{}).mirrorOut||0); spawnSiteFlow(2, Math.max(0,Math.min(8,d)), s1on); }
   prevDr={}; st.sites.forEach(s=> prevDr[s.id]={mirrorOut:s.mirrorOut});
   drNarration(); updateConn(true);
 }
@@ -475,15 +498,15 @@ function drNarration(){
   if(off.length){ const surv=on[0];
     txt=`<b>${off.map(s=>s.name).join(", ")} OFFLINE.</b> Active/active DR: <b>${surv?surv.name:"—"}</b> keeps accepting traffic and already holds a <b>converged copy</b> via the mirror — <b>no data lost</b>. The mirror re-syncs when the site returns.`;
   }else{
-    const conv = (sites.length===2)? `Both queues converged (~${sites[0].messageCount} ≈ ${sites[1].messageCount}).` : "";
-    txt=`<b>Active/active — bidirectional mirror.</b> Both sites accept producers; messages + acks replicate <b>both ways</b> (Site 1 ⇄ Site 2). ${conv} Async + broker dedup keep them in sync — at-least-once, not global exactly-once.`;
+    const conv = (sites.length===2)? `Both queues converge (~${sites[0].messageCount} ≈ ${sites[1].messageCount}).` : "";
+    txt=`<b>Active/active — bidirectional mirror.</b> Each site takes its own local writes; the mirror carries <b>each site's own messages</b> to the other. <b>Site 1 → Site 2</b> and <b>Site 2 → Site 1</b> are <b>different messages, not a loop</b>. ${conv} Async + broker dedup — at-least-once, not global exactly-once.`;
   }
   $("#narr").innerHTML=txt;
 }
 
 // ---------- dots / animation ----------
-function spawnDot(route, color, speed){
-  // route: array de pontos {x,y}; speed px/s
+function spawnDot(route, color, speed, onEnd){
+  // route: array de pontos {x,y}; speed px/s; onEnd: callback ao chegar
   const segs=[]; let total=0;
   for(let i=0;i<route.length-1;i++){
     const a=route[i], b=route[i+1];
@@ -495,7 +518,7 @@ function spawnDot(route, color, speed){
   el.setAttribute("r","5.5"); el.setAttribute("fill",color);
   el.setAttribute("filter","url(#glow)");
   dotsG.appendChild(el);
-  dots.push({el,segs,total,dist:0,speed:speed||230,color,onEnd:null});
+  dots.push({el,segs,total,dist:0,speed:speed||230,color,onEnd:onEnd||null});
 }
 
 function fanOutDot(color){
