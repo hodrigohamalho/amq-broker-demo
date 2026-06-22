@@ -244,7 +244,92 @@ network/peering, not the public internet.
 > queue is consumed on both sites, the async mirror's duplicate window still applies —
 > use idempotent consumers / dedup (see §4).
 
-## 7. How this maps to the demo scenarios in this repo
+## 7. Active/passive across two sites: failover control, mirror direction & fencing
+
+A common DR shape: **Site 1 active, Site 2 passive** standby, two separate OpenShift
+clusters, mostly **AMQP** apps reaching the broker through a load balancer. Three
+decisions define how robust (and how controllable) it is.
+
+### 7.1 Failover control — GSLB (centralized) vs client failover list
+
+| | Client-side failover list | **GSLB / DNS (centralized)** |
+|---|---|---|
+| Who decides to fail over | each app, independently | one arbiter: the **GSLB health-check** |
+| RTO | seconds | health-check + DNS TTL (≈ 1–3 min, tunable) |
+| Behaviour on a **false negative** (transient blip) | some apps jump to Site 2, others stay → **load split unpredictably** across sites → accidental active/active | apps just reconnect to Site 1 (GSLB didn't flip) → **nothing moves** |
+| Control of "who is where" | lost (per-app decisions) | full — it's the state of one DNS record |
+| Switch is | per-app, gradual, sticky | **all-or-nothing**, deterministic |
+
+For an active/passive design where the goal is *everyone on Site 1, switch together*,
+**GSLB-only is the right trade**: you give up RTO for **centralized, deterministic**
+failover. The flow: clients hold **one hostname** (no list); a blip drops connections
+and they reconnect — re-resolving DNS to **the same** site; only when the GSLB
+health-check confirms a sustained failure does the record flip and **all** clients move
+on their next reconnect.
+
+> **The one knob:** the **GSLB health-check** (require N consecutive failures; low DNS
+> TTL of 30–60 s; ensure clients re-resolve DNS on each reconnect, not pin the IP).
+> Because the decision is centralized, a false negative on a single client can't scatter
+> the load.
+
+### 7.2 Mirror direction — one-way + invert vs bidirectional
+
+The dual-mirror "downside" (duplicate-delivery) comes from consumers on **both** sites.
+In active/passive **Site 2 is passive — no consumers — so that risk does not apply**,
+which makes bidirectional the *simpler* choice, not the riskier one.
+
+| | One-way (Site1→Site2) + invert on failover | **Bidirectional (dual)** |
+|---|---|---|
+| Normal state | 1 mirror connection | 2 (the return one idles, harmless) |
+| On failover | **manual step**: reconfigure the mirror on Site 2 → a `brokerProperties` change = **broker reconcile/restart** mid-incident | **nothing to do** — the Site2→Site1 link already exists |
+| Failback | Site 1 is stale; must re-sync (invert again) | **automatic**: what Site 2 produced while Site 1 was down was buffered and **flushes to Site 1 on recovery** |
+| Operational risk | high (human step + restart at the worst time) | low |
+
+**Recommendation: keep it bidirectional and change nothing on failure.** It's safe here
+(only one site consumes), and failover **and** failback need no action on the mirror —
+the recovering site re-syncs itself.
+
+### 7.3 Fencing — preventing split-brain
+
+DNS failover is **not atomic**. The dangerous case isn't a clean site loss — it's a
+**false positive / partition**: the GSLB can't reach Site 1 and flips, but Site 1 is
+**still up** and some clients (stale DNS cache, connections that never dropped) keep
+processing on it → **both sites active** → double processing and divergent state.
+
+**Fencing** = guaranteeing Site 1 is truly out when Site 2 takes over.
+
+> ⚠️ AMQP mirror is **async replication — no quorum, no leader election, no built-in
+> fencing** (unlike Artemis HA *replication*). So **fencing is an infra/ops
+> responsibility**, not something the broker does for you.
+
+How to fence Site 1 in this setup (most → least robust):
+1. **Cut Site 1 at the network** (firewall / close the broker route or LB / network
+   ACL) when the GSLB declares the failure — no client reaches it, even with a stale
+   cache. STONITH-style.
+2. **Scale the Site 1 brokers to 0** — only works if Site 1 is still *reachable* (in a
+   partition it may not be, which is why the network cut above is more reliable).
+3. **Automation tied to the GSLB flip** triggers the fence; or a **runbook** step
+   ("confirm/fence Site 1 before declaring Site 2 active").
+
+When it matters: a **true site loss** needs no fencing (it's already dead); fencing is
+for the **partial-failure / false-positive** case.
+
+**Three layers, none sufficient alone:** (1) tune the health-check to avoid false flips;
+(2) **fence** the suspect site; (3) **idempotent consumers / dedup** in the app as the
+net for the short DNS-propagation window. (The broker's duplicate detection avoids
+re-adding the same mirrored message, but does **not** coordinate consumption across two
+active sites — app idempotency does.)
+
+### Recommended blueprint (active/passive, two clusters, mostly AMQP)
+
+- **GSLB-only failover**, single hostname, **no client failover list** → centralized,
+  all-or-nothing switch; tune the health-check + low DNS TTL.
+- **Bidirectional (dual) mirror** → automatic failover *and* failback, no mirror change.
+- **Fence Site 1** on failover (network cut / scale 0) → no split-brain.
+- **Idempotent consumers** → safety net for the propagation window.
+- Accept the trade: **RTO of minutes for full control and determinism.**
+
+## 8. How this maps to the demo scenarios in this repo
 
 | This guide | Repo scenario |
 |---|---|
