@@ -70,6 +70,7 @@ DR_NAMESPACE = os.environ.get("DR_NAMESPACE", "amq-aa")
 SITES = [
     {
         "id": 1, "name": "Site 1", "cr": "site1-broker", "mirror": "toSite2",
+        "queue": os.environ.get("SITE1_QUEUE", "site1Queue"),
         "console": os.environ.get(
             "SITE1_CONSOLE",
             "https://site1-console-amq-aa.apps.cluster1.sandbox1992.opentlc.com",
@@ -77,6 +78,7 @@ SITES = [
     },
     {
         "id": 2, "name": "Site 2", "cr": "site2-broker", "mirror": "toSite1",
+        "queue": os.environ.get("SITE2_QUEUE", "site2Queue"),
         "console": os.environ.get(
             "SITE2_CONSOLE",
             "https://site2-console-amq-aa.apps.cluster1.sandbox1992.opentlc.com",
@@ -239,19 +241,21 @@ def _mirror_mbean(name):
 
 
 def read_site(site):
-    """Read a site's state: broker Active, demoQueue depth/routed, and the
-    outbound mirror queue MessagesAdded (= events replicated to the other site)."""
+    """Read a site's state: broker Active, the site's OWN queue depth/routed/consumers,
+    and the outbound mirror queue MessagesAdded (= events replicated to the other site).
+    Each site owns one queue (consumed only there); the other queue is a warm copy."""
+    q = site.get("queue", CFG["queue"])
     out = {"id": site["id"], "name": site["name"], "cr": site["cr"],
-           "mirror": site["mirror"], "online": False, "active": False,
+           "mirror": site["mirror"], "queue": q, "online": False, "active": False,
            "messageCount": 0, "routed": 0, "mirrorOut": 0, "consumers": 0}
     batch = [
         {"type": "read", "mbean": 'org.apache.activemq.artemis:broker="amq-broker"',
          "attribute": "Active"},
-        {"type": "read", "mbean": _addr_mbean(CFG["queue"]),
+        {"type": "read", "mbean": _addr_mbean(q),
          "attribute": ["MessageCount", "RoutedMessageCount"]},
         {"type": "read", "mbean": _mirror_mbean(site["mirror"]),
          "attribute": ["MessagesAdded"]},
-        {"type": "read", "mbean": _q_mbean(CFG["queue"]),
+        {"type": "read", "mbean": _q_mbean(q),
          "attribute": ["ConsumerCount"]},
     ]
     res = _jolokia_post(site["console"], batch)
@@ -293,13 +297,13 @@ def dr_demo_state():
     _dr_demo["m21"] += 3
     return {"sites": [
         {"id": 1, "name": "Site 1", "cr": "site1-broker", "mirror": "toSite2",
-         "online": True, "active": True, "messageCount": _dr_demo["s1q"],
-         "routed": _dr_demo["s1q"] + _dr_demo["m21"], "mirrorOut": _dr_demo["m12"],
-         "consumers": 1},
+         "queue": "site1Queue", "online": True, "active": True,
+         "messageCount": _dr_demo["s1q"] % 6,
+         "routed": _dr_demo["m12"], "mirrorOut": _dr_demo["m12"], "consumers": 2},
         {"id": 2, "name": "Site 2", "cr": "site2-broker", "mirror": "toSite1",
-         "online": True, "active": True, "messageCount": _dr_demo["s2q"],
-         "routed": _dr_demo["s2q"] + _dr_demo["m12"], "mirrorOut": _dr_demo["m21"],
-         "consumers": 1},
+         "queue": "site2Queue", "online": True, "active": True,
+         "messageCount": _dr_demo["s2q"] % 6,
+         "routed": _dr_demo["m21"], "mirrorOut": _dr_demo["m21"], "consumers": 2},
     ]}
 
 

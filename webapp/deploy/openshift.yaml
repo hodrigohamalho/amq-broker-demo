@@ -1,0 +1,63 @@
+# Run the visualizer INSIDE the cluster and expose it via a Route.
+# It reads each broker's Jolokia over the in-cluster console Services (HTTP :8161).
+# Image: quay.io/hodrigohamalho/amq-broker-demo (public, multi-arch).
+#
+#   oc apply -f webapp/deploy/openshift.yaml
+#   oc get route amq-visualizer -n amq-demo -o jsonpath='{.spec.host}'
+#
+# Note: the demo control buttons (kill/scale) use `oc`, which isn't present in the
+# container — trigger failover with `oc` from your laptop and watch it live here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amq-visualizer
+  namespace: amq-demo
+  labels: { app: amq-visualizer }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: amq-visualizer } }
+  template:
+    metadata: { labels: { app: amq-visualizer } }
+    spec:
+      containers:
+        - name: visualizer
+          image: quay.io/hodrigohamalho/amq-broker-demo:latest
+          imagePullPolicy: Always
+          ports:
+            - { containerPort: 8080, name: http }
+          env:
+            - { name: PORT, value: "8080" }
+            - { name: BROKER0_CONSOLE, value: "http://demo-broker-wconsj-0-svc.amq-demo.svc:8161" }
+            - { name: BROKER1_CONSOLE, value: "http://demo-broker-wconsj-1-svc.amq-demo.svc:8161" }
+            - { name: SITE1_CONSOLE, value: "http://site1-broker-wconsj-0-svc.amq-aa.svc:8161" }
+            - { name: SITE2_CONSOLE, value: "http://site2-broker-wconsj-0-svc.amq-aa.svc:8161" }
+            - { name: DR_NAMESPACE, value: "amq-aa" }
+          readinessProbe:
+            httpGet: { path: /api/config, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 192Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: amq-visualizer
+  namespace: amq-demo
+  labels: { app: amq-visualizer }
+spec:
+  selector: { app: amq-visualizer }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: amq-visualizer
+  namespace: amq-demo
+  labels: { app: amq-visualizer }
+spec:
+  to: { kind: Service, name: amq-visualizer }
+  port: { targetPort: http }
+  tls: { termination: edge, insecureEdgeTerminationPolicy: Redirect }

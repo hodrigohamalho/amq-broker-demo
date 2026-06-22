@@ -1,9 +1,10 @@
-# Active/active traffic with CLIENT FAILOVER, so a site outage stops nothing.
-# Failover is explicit in the shell: try the LOCAL site; if it fails, try the REMOTE
-# one (`artemis <local> || artemis <remote>`), in a loop. When the local site is back,
-# the next iteration prefers it again. A low reconnectAttempts makes the local attempt
-# fail fast so the fall-through to the remote site is quick.
-#   Site 1 apps: local=site1, remote=site2    Site 2 apps: local=site2, remote=site1
+# Active/active, PARTITIONED by queue — each queue has a single owning site, so no
+# queue is consumed at both sites at once (no cross-site double-delivery).
+#   Site 1 owns site1Queue (produce + 2 consumers)   Site 2 owns site2Queue (produce + 2 consumers)
+# The dual mirror replicates BOTH queues both ways, so each site keeps a warm copy of
+# the other's queue for DR. Client failover (local || remote) keeps things running on a
+# site outage: the failed-over apps consume their queue from the surviving site's copy
+# — still a single consuming site.
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -22,10 +23,10 @@ spec:
             - |
               P='?reconnectAttempts=2&retryInterval=1000&callTimeout=4000&connectionTTL=6000&clientFailureCheckPeriod=2000'
               L="tcp://site1-broker-all-0-svc:61616$P"; R="tcp://site2-broker-all-0-svc:61616$P"
-              echo "[SITE1-PRODUCER] prefers site1, fails over to site2";
+              echo "[SITE1-PRODUCER] -> site1Queue (prefers site1, fails over to site2)";
               while true; do
-                /opt/amq/bin/artemis producer --url "$L" --user admin --password admin --destination queue://demoQueue --message-count 5 --sleep 1500 --message-size 200 \
-                || { echo "[SITE1-PRODUCER] site1 down -> failover to site2"; /opt/amq/bin/artemis producer --url "$R" --user admin --password admin --destination queue://demoQueue --message-count 5 --sleep 1500 --message-size 200; }
+                /opt/amq/bin/artemis producer --url "$L" --user admin --password admin --destination queue://site1Queue --message-count 5 --sleep 1500 --message-size 200 \
+                || { echo "[SITE1-PRODUCER] site1 down -> failover to site2"; /opt/amq/bin/artemis producer --url "$R" --user admin --password admin --destination queue://site1Queue --message-count 5 --sleep 1500 --message-size 200; }
                 sleep 1;
               done
 ---
@@ -46,10 +47,10 @@ spec:
             - |
               P='?reconnectAttempts=2&retryInterval=1000&callTimeout=4000&connectionTTL=6000&clientFailureCheckPeriod=2000'
               L="tcp://site2-broker-all-0-svc:61616$P"; R="tcp://site1-broker-all-0-svc:61616$P"
-              echo "[SITE2-PRODUCER] prefers site2, fails over to site1";
+              echo "[SITE2-PRODUCER] -> site2Queue (prefers site2, fails over to site1)";
               while true; do
-                /opt/amq/bin/artemis producer --url "$L" --user admin --password admin --destination queue://demoQueue --message-count 5 --sleep 1500 --message-size 200 \
-                || { echo "[SITE2-PRODUCER] site2 down -> failover to site1"; /opt/amq/bin/artemis producer --url "$R" --user admin --password admin --destination queue://demoQueue --message-count 5 --sleep 1500 --message-size 200; }
+                /opt/amq/bin/artemis producer --url "$L" --user admin --password admin --destination queue://site2Queue --message-count 5 --sleep 1500 --message-size 200 \
+                || { echo "[SITE2-PRODUCER] site2 down -> failover to site1"; /opt/amq/bin/artemis producer --url "$R" --user admin --password admin --destination queue://site2Queue --message-count 5 --sleep 1500 --message-size 200; }
                 sleep 1;
               done
 ---
@@ -57,7 +58,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: { name: site1-consumer, namespace: amq-aa, labels: { app: site1-consumer, demo: amq-aa, site: site1 } }
 spec:
-  replicas: 1
+  replicas: 2
   selector: { matchLabels: { app: site1-consumer } }
   template:
     metadata: { labels: { app: site1-consumer, demo: amq-aa, site: site1 } }
@@ -70,10 +71,10 @@ spec:
             - |
               P='?reconnectAttempts=2&retryInterval=1000&callTimeout=4000&connectionTTL=6000&clientFailureCheckPeriod=2000'
               L="tcp://site1-broker-all-0-svc:61616$P"; R="tcp://site2-broker-all-0-svc:61616$P"
-              echo "[SITE1-CONSUMER] prefers site1, fails over to site2";
+              echo "[SITE1-CONSUMER] <- site1Queue (prefers site1, fails over to site2)";
               while true; do
-                /opt/amq/bin/artemis consumer --url "$L" --user admin --password admin --destination queue://demoQueue --message-count 100000 --receive-timeout 15000 --verbose \
-                || { echo "[SITE1-CONSUMER] site1 down -> failover to site2"; /opt/amq/bin/artemis consumer --url "$R" --user admin --password admin --destination queue://demoQueue --message-count 100000 --receive-timeout 15000 --verbose; }
+                /opt/amq/bin/artemis consumer --url "$L" --user admin --password admin --destination queue://site1Queue --message-count 100000 --receive-timeout 15000 --verbose \
+                || { echo "[SITE1-CONSUMER] site1 down -> failover to site2"; /opt/amq/bin/artemis consumer --url "$R" --user admin --password admin --destination queue://site1Queue --message-count 100000 --receive-timeout 15000 --verbose; }
                 sleep 1;
               done
 ---
@@ -81,7 +82,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: { name: site2-consumer, namespace: amq-aa, labels: { app: site2-consumer, demo: amq-aa, site: site2 } }
 spec:
-  replicas: 1
+  replicas: 2
   selector: { matchLabels: { app: site2-consumer } }
   template:
     metadata: { labels: { app: site2-consumer, demo: amq-aa, site: site2 } }
@@ -94,9 +95,9 @@ spec:
             - |
               P='?reconnectAttempts=2&retryInterval=1000&callTimeout=4000&connectionTTL=6000&clientFailureCheckPeriod=2000'
               L="tcp://site2-broker-all-0-svc:61616$P"; R="tcp://site1-broker-all-0-svc:61616$P"
-              echo "[SITE2-CONSUMER] prefers site2, fails over to site1";
+              echo "[SITE2-CONSUMER] <- site2Queue (prefers site2, fails over to site1)";
               while true; do
-                /opt/amq/bin/artemis consumer --url "$L" --user admin --password admin --destination queue://demoQueue --message-count 100000 --receive-timeout 15000 --verbose \
-                || { echo "[SITE2-CONSUMER] site2 down -> failover to site1"; /opt/amq/bin/artemis consumer --url "$R" --user admin --password admin --destination queue://demoQueue --message-count 100000 --receive-timeout 15000 --verbose; }
+                /opt/amq/bin/artemis consumer --url "$L" --user admin --password admin --destination queue://site2Queue --message-count 100000 --receive-timeout 15000 --verbose \
+                || { echo "[SITE2-CONSUMER] site2 down -> failover to site1"; /opt/amq/bin/artemis consumer --url "$R" --user admin --password admin --destination queue://site2Queue --message-count 100000 --receive-timeout 15000 --verbose; }
                 sleep 1;
               done

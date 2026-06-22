@@ -78,15 +78,30 @@ spec:
     - "AMQPConnections.toSite1.connectionElements.mirror.queueCreation=true"
     - "AMQPConnections.toSite1.connectionElements.mirror.queueRemoval=true"
     - "AMQPConnections.toSite1.connectionElements.mirror.durable=true"
+# Both queues exist on BOTH brokers: each is consumed on its owner site and kept as a
+# warm mirror copy on the other.
 ---
 apiVersion: broker.amq.io/v1beta1
 kind: ActiveMQArtemisAddress
 metadata:
-  name: aa-queue
+  name: aa-queue-site1
   namespace: amq-aa
 spec:
-  addressName: demoQueue
-  queueName: demoQueue
+  addressName: site1Queue
+  queueName: site1Queue
+  routingType: anycast
+  applyToCrNames:
+    - site1-broker
+    - site2-broker
+---
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemisAddress
+metadata:
+  name: aa-queue-site2
+  namespace: amq-aa
+spec:
+  addressName: site2Queue
+  queueName: site2Queue
   routingType: anycast
   applyToCrNames:
     - site1-broker

@@ -396,7 +396,7 @@ function renderSiteCard(s){
     <div class="${cardCls}" style="width:250px">
       <div class="pulse"></div>
       <div class="top">
-        <div><div class="nm">🌐 ${s.name}</div><div class="pod">${s.cr||""}</div></div>
+        <div><div class="nm">🌐 ${s.name}</div><div class="pod">${s.cr||""} · owns ${s.queue||"—"}</div></div>
         <span class="st ${stCls}">${stTxt}</span>
       </div>
       <div class="grid2">
@@ -521,10 +521,10 @@ function drNarration(){
   const sites=lastDr.sites, on=sites.filter(s=>s.online), off=sites.filter(s=>!s.online);
   let txt="";
   if(off.length){ const surv=on[0], dead=off[0];
-    txt=`<b>${dead.name} OFFLINE.</b> Its producer and consumer <b>failed over to ${surv?surv.name:"—"}</b> — <b>nothing stopped</b>. ${surv?surv.name:"The survivor"} now serves both sites and already holds the <b>converged copy</b> (no data lost). The mirror re-syncs when ${dead.name} returns.`;
+    txt=`<b>${dead.name} OFFLINE.</b> Its producer and consumers <b>failed over to ${surv?surv.name:"—"}</b>, which already holds the <b>warm mirror copy</b> of ${dead.queue||"its queue"} — <b>nothing stopped</b>, no data lost, still a single consuming site. The mirror re-syncs when ${dead.name} returns.`;
   }else{
-    const conv = (sites.length===2)? `Both queues converge (~${sites[0].messageCount} ≈ ${sites[1].messageCount}).` : "";
-    txt=`<b>Active/active — bidirectional mirror.</b> Each site takes its own local writes; the mirror carries <b>each site's own messages</b> to the other. <b>Site 1 → Site 2</b> and <b>Site 2 → Site 1</b> are <b>different messages, not a loop</b>. ${conv} Async + broker dedup — at-least-once, not global exactly-once.`;
+    const q1=sites[0]&&sites[0].queue||"queue A", q2=sites[1]&&sites[1].queue||"queue B";
+    txt=`<b>Active/active — partitioned by queue.</b> <b>Site 1 owns ${q1}</b>, <b>Site 2 owns ${q2}</b> — each queue is consumed at <b>exactly one site</b>, so there is <b>no double-delivery</b>. The dual mirror keeps a <b>warm copy</b> of each queue on the other site for DR. On a site outage its apps fail over to the survivor's copy — still a single consuming site.`;
   }
   $("#narr").innerHTML=txt;
 }
@@ -739,7 +739,7 @@ function updateConn(ok){
 const HINTS={
   queue:"Point-to-point: each message is delivered to <b>one</b> consumer. Multiple consumers compete (load balancing). Equivalent to a JMS Queue.",
   topic:"Publish/Subscribe: <b>every subscriber gets a copy</b> of each message. Ideal for broadcasting events. Equivalent to a JMS Topic.",
-  dr:"Active/active across two sites via <b>bidirectional AMQP mirror</b> (like Kafka MM2). Each site has its own PV; messages + acks replicate both ways and converge."
+  dr:"Active/active across two sites, <b>partitioned by queue</b> — each queue is owned (consumed) by a single site, so no double-delivery. The <b>bidirectional mirror</b> keeps a warm copy of each queue on the other site for DR."
 };
 function setMode(m){
   mode=m;
